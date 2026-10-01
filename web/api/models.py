@@ -144,6 +144,7 @@ class LabelEventCreateRequest(ApiModel):
     taxonomy_path: str | None = None
     source_sample_id: str = Field(min_length=1, max_length=80)
     sample_id: str = Field(min_length=1, max_length=80)
+    target_event_uuid: str | None = None
     sample_scope: dict[str, float]
     scope_kind: Literal["event", "whole"] = "event"
     source: str = Field(min_length=1, max_length=120, pattern=r"^(?:expert|operator)(?:_.+)?$")
@@ -153,6 +154,16 @@ class LabelEventCreateRequest(ApiModel):
     reason_confidence: float | None = Field(default=None, ge=0, le=1)
     note: str = Field(default="", max_length=2000)
     prototype: bool = False
+
+
+class LabelProjectSaveRequest(ApiModel):
+    project_id: str | None = None
+    name: str = Field(min_length=1, max_length=120)
+    root_path: str = Field(min_length=1)
+    file_format: Literal["wav", "tdms"]
+    file_type: Literal["rail", "motor", "generic"]
+    taxonomy_path: str | None = None
+    history_path: str | None = None
 
 
 class LabelEventDeleteRequest(ApiModel):

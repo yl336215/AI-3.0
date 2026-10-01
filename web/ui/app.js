@@ -25,6 +25,10 @@ const API = Object.freeze({
   databaseLines: databaseUid => `/api/databases/${encodeURIComponent(databaseUid)}/lines`,
   databaseLinesAutoDetect: databaseUid => `/api/databases/${encodeURIComponent(databaseUid)}/lines/auto-detect`,
   labelingResolve: "/api/labeling/resolve",
+  labelingProjects: "/api/labeling/projects",
+  labelingProjectDelete: projectId => `/api/labeling/projects/${encodeURIComponent(projectId)}`,
+  labelingSelectProjectRoot: "/api/labeling/projects/select-root",
+  labelingScanProject: projectId => `/api/labeling/projects/${encodeURIComponent(projectId)}/scan`,
   labelingSelectFile: fileType => `/api/labeling/select-file?file_type=${encodeURIComponent(fileType)}`,
   labelingSelectSources: (mode, fileType) => `/api/labeling/select-sources?mode=${encodeURIComponent(mode)}&file_type=${encodeURIComponent(fileType)}`,
   labelingWaveform: (path, sampleId, line, wavProfile = "", filter = false) => `/api/labeling/waveform?path=${encodeURIComponent(path)}&sample_id=${encodeURIComponent(sampleId)}&line=${encodeURIComponent(line)}&wav_profile=${encodeURIComponent(wavProfile)}&low_frequency_filter=${filter}`,
@@ -35,6 +39,7 @@ const API = Object.freeze({
   labelingSelectJson: "/api/labeling/select-json",
   labelingQueueLabels: (path, historyPath) => `/api/labeling/queue-labels?path=${encodeURIComponent(path)}&history_path=${encodeURIComponent(historyPath || "")}`,
   labelingSave: "/api/labeling/labels",
+  labelingEditCapability: "/api/labeling/labels/edit-capability",
   labelingDelete: "/api/labeling/labels",
   labelingTaxonomy: path => path ? `/api/labeling/taxonomy?path=${encodeURIComponent(path)}` : "/api/labeling/taxonomy",
   importSelectSources: (mode, fileType) => `/api/import/select-sources?mode=${encodeURIComponent(mode)}&file_type=${encodeURIComponent(fileType)}`,
@@ -61,7 +66,11 @@ const state = {
   reconcile: null,
   reconcilePathOptions: { folders: [], files: [] },
   labelingFile: null,
+  labelProjects: [],
+  labelProjectId: "",
+  labelProjectQueues: new Map(),
   labelingFiles: [],
+  labelLayoutSettings: new Map(),
   labelingAnalysisSample: "",
   labelingAnalysisFile: null,
   labelingAnalysisCards: [],
@@ -82,7 +91,6 @@ const state = {
   labelingSourceSelection: null,
   labelingRestoredQueuePending: false,
   labelingRestoredLine: "",
-  labelingRestoredTaxonomyPath: "",
   labelingPlaybackRate: 1,
   labelingPlaybackVolume: 1,
   labelingLowFrequencyFilter: false,
@@ -130,6 +138,7 @@ function saveLastLabelSettings() {
     wavProfile: $("#labelWavProfileSelect")?.value || "",
     line: $("#labelLineSelect")?.value || "",
     sourceSelection: state.labelingSourceSelection,
+    projectId: state.labelProjectId,
     queueIndex: state.labelingQueueIndex,
   };
   try { localStorage.setItem(LAST_LABEL_SETTINGS_KEY, JSON.stringify(settings)); }
@@ -380,10 +389,8 @@ function switchView(name) {
 async function switchTopLevelView(name) {
   switchView(name);
   if (name === "labeling") {
-    if (!state.labelTaxonomy.path && state.labelingRestoredTaxonomyPath) {
-      try { await loadLabelTaxonomy(state.labelingRestoredTaxonomyPath); } catch (error) { notify(`标签配置加载失败：${error.message}`, "error", true); }
-    }
-    await loadRestoredLabelQueue();
+    await loadLabelProjects();
+    switchLabelWorkflowTab("projects");
     return;
   }
   if (!state.databases.length) await refreshAll(false);
@@ -1259,7 +1266,7 @@ function populateLabelLines(selected = "") {
 function syncLabelLineField() {
   const isTdms = $("#labelFileType").value === "tdms";
   $("#labelLineField").hidden = !isTdms;
-  $("#labelWavProfileField").hidden = isTdms;
+  $("#labelWavProfileField").hidden = true;
   if (!isTdms) {
     $("#labelLineSelect").value = "";
     $("#labelLineSelect").disabled = true;
@@ -1316,7 +1323,6 @@ function restoreLastLabelSettings() {
     $("#labelJsonSelectionStatus").textContent = "上次选择的标签类别 JSON";
   }
   state.labelingRestoredLine = saved.line || "";
-  state.labelingRestoredTaxonomyPath = saved.taxonomyPath || "";
   if (sessionJsonPath) {
     state.labelingHistoryPath = sessionJsonPath;
     state.labelingHistorySelected = true;
@@ -1325,12 +1331,15 @@ function restoreLastLabelSettings() {
     const selection = saved.sourceSelection;
     const paths = selection.paths.filter(path => typeof path === "string" && path);
     if (paths.length) {
+      state.labelProjectId = saved.projectId || "";
+      if (saved.projectId) state.labelProjectQueues.set(saved.projectId, { rootPath: selection.rootPath, paths, fileFormat: saved.fileType, fileType: saved.wavProfile || "generic" });
       state.labelingSourceSelection = { ...selection, paths };
       state.labelingOutputDirectory = selection.rootPath || paths[0].split("/").slice(0, -1).join("/");
       $("#labelSelectedSessionPath").value = state.labelingHistoryPath;
       $("#labelSessionSelectionStatus").textContent = state.labelingHistoryPath ? `上次使用：${state.labelingHistoryPath}` : "不选择则自动生成标注 JSON";
       state.labelingQueue = groupLabelSources(paths, $("#labelWavProfileSelect").value, $("#labelFileType").value === "wav");
       state.labelingAllQueue = state.labelingQueue;
+      renderLabelQueueFolderOptions();
       state.labelingQueueIndex = Math.max(0, Math.min(state.labelingQueue.length - 1, Number(saved.queueIndex) || 0));
       $("#labelSelectedSourcePath").value = selection.displayPath || state.labelingOutputDirectory;
       $("#labelTdmsPath").value = state.labelingQueue[state.labelingQueueIndex]?.path || "";
@@ -1460,7 +1469,7 @@ async function startLabelingSession() {
 
 function renderLabelTaxonomyEditor() {
   const taxonomy = state.labelTaxonomy;
-  $("#labelTaxonomyPath").textContent = taxonomy.path || "请先选择标签类别 JSON";
+  $("#labelTaxonomyPath").textContent = taxonomy.path || "请先选择项目根目录";
   $("#saveLabelTaxonomyButton").disabled = !taxonomy.path;
   if (!taxonomy.path) return;
   const resultOptions = taxonomy.results.map(item => `<option value="${escapeHtml(item.result_key)}">${escapeHtml(item.result_name || item.result_key)}</option>`).join("");
@@ -1472,9 +1481,16 @@ function renderLabelTaxonomyEditor() {
   });
 }
 
-async function loadLabelTaxonomy(path) {
+function compareReasonIds(left, right) {
+  const leftId = Number(left.id);
+  const rightId = Number(right.id);
+  return (Number.isFinite(leftId) ? leftId : Infinity) - (Number.isFinite(rightId) ? rightId : Infinity)
+    || left.key.localeCompare(right.key);
+}
+
+async function loadLabelTaxonomy(path, { selectedPath = path } = {}) {
   const payload = await request(API.labelingTaxonomy(path));
-  state.labelTaxonomy = { path: payload.path, sourcePath: path, results: payload.results || [], reasons: payload.reasons || [] };
+  state.labelTaxonomy = { path: payload.path, sourcePath: selectedPath, results: payload.results || [], reasons: (payload.reasons || []).sort((a, b) => compareReasonIds({ id: a.reason_id, key: a.reason_key }, { id: b.reason_id, key: b.reason_key })) };
   renderLabelTaxonomyEditor();
   renderLabelQueueFilterOptions();
 }
@@ -1492,6 +1508,31 @@ function renderLabelQueueFilterOptions() {
   reason._syncTouchPicker?.();
 }
 
+function labelQueueRoot() {
+  const projectRoot = state.labelProjects.find(item => item.project_id === state.labelProjectId)?.root_path;
+  return (projectRoot || state.labelingSourceSelection?.rootPath || state.labelingOutputDirectory || "").replace(/\/$/, "");
+}
+
+function labelQueueFolder(path, root) {
+  const relative = root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path.split("/").pop();
+  return relative.includes("/") ? relative.slice(0, relative.lastIndexOf("/")) : "__root__";
+}
+
+function renderLabelQueueFolderOptions() {
+  const select = $("#labelQueueFolderFilter");
+  const selected = select.value;
+  const root = labelQueueRoot();
+  const folders = [...new Set(state.labelingAllQueue.flatMap(item => (item.paths || [item.path]).flatMap(path => {
+    const directory = labelQueueFolder(path, root);
+    if (directory === "__root__") return [directory];
+    const parts = directory.split("/");
+    return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+  })))].sort((a, b) => a.localeCompare(b, "zh-CN"));
+  select.innerHTML = '<option value="">全部子文件夹</option>' + folders.map(folder => `<option value="${escapeHtml(folder)}">${escapeHtml(folder === "__root__" ? "根目录文件" : folder)}</option>`).join("");
+  if (folders.includes(selected)) select.value = selected;
+  select._syncTouchPicker?.();
+}
+
 async function refreshLabelQueueLabels() {
   const path = state.labelingSessionPath || state.labelingHistoryPath;
   if (!path) { state.labelingQueueLabels = new Map(); return; }
@@ -1500,12 +1541,20 @@ async function refreshLabelQueueLabels() {
 }
 
 async function applyLabelQueueFilter() {
+  const folder = $("#labelQueueFolderFilter").value;
+  const root = labelQueueRoot();
+  const search = $("#labelQueueSearchInput").value.trim().toLocaleLowerCase();
   const resultKey = $("#labelQueueResultFilter").value;
   const reasonKey = $("#labelQueueReasonFilter").value;
   const all = state.labelingAllQueue;
   const resultName = state.labelTaxonomy.results.find(item => item.result_key === resultKey)?.result_name;
   const reasonName = state.labelTaxonomy.reasons.find(item => item.reason_key === reasonKey)?.reason_name;
   const filtered = all.filter(item => {
+    if (search && !(item.paths || [item.path]).some(path => path.split(/[\\/]/).pop().toLocaleLowerCase().includes(search))) return false;
+    if (folder && !(item.paths || [item.path]).some(path => {
+      const directory = labelQueueFolder(path, root);
+      return directory === folder || (folder !== "__root__" && directory.startsWith(`${folder}/`));
+    })) return false;
     if (!resultKey && !reasonKey) return true;
     const events = (item.paths || [item.path]).flatMap(path => state.labelingQueueLabels.get(path) || []);
     if (resultKey === "__unlabeled__") return !events.length;
@@ -1516,7 +1565,7 @@ async function applyLabelQueueFilter() {
   if (previous && !filtered.includes(previous) && !discardPendingLabelEventsForFileChange()) return;
   state.labelingQueue = filtered;
   state.labelingQueueIndex = filtered.length ? Math.max(0, filtered.indexOf(previous)) : -1;
-  $("#labelQueueFilterStatus").textContent = resultKey || reasonKey ? `筛选结果 ${filtered.length}/${all.length} 件` : `显示全部 ${all.length} 件`;
+  $("#labelQueueFilterStatus").textContent = folder || search || resultKey || reasonKey ? `筛选结果 ${filtered.length}/${all.length} 件` : `显示全部 ${all.length} 件`;
   renderLabelQueue();
   if (filtered.length && !labelQueueItemReady(filtered[state.labelingQueueIndex])) await loadLabelQueueIndex(state.labelingQueueIndex);
 }
@@ -1564,7 +1613,7 @@ async function saveLabelTaxonomy(button) {
   setBusy(button, true, "保存中…");
   setLabelConfigLoading(true);
   try {
-    const payload = await request("/api/labeling/taxonomy", { method: "PUT", body: { path: state.labelTaxonomy.sourcePath, results: state.labelTaxonomy.results, reasons: state.labelTaxonomy.reasons } });
+    const payload = await request("/api/labeling/taxonomy", { method: "PUT", body: { path: state.labelTaxonomy.sourcePath || $("#labelSelectedSourcePath").value.trim(), results: state.labelTaxonomy.results, reasons: state.labelTaxonomy.reasons } });
     state.labelTaxonomy = { path: payload.path, sourcePath: state.labelTaxonomy.sourcePath, results: payload.results, reasons: payload.reasons };
     renderLabelTaxonomyEditor();
     applySavedLabelTaxonomy(payload);
@@ -1695,7 +1744,7 @@ function renderLabelQueue() {
     const status = item.loading ? "载入中…" : item.loadError ? "载入失败" : item.labeled ? "已标注" : item.partialLabeled ? "部分标注" : item.loaded ? "可开始" : "未载入";
     const files = item.paths || [item.path];
     return `<button class="label-file-queue-item ${index === current ? "is-active" : ""}" data-label-queue-index="${index}" type="button" title="单击选择，双击开始标注" ${loading ? "disabled" : ""}><span>${index + 1}</span><strong>${escapeHtml(item.displayName || item.path.split("/").pop())}</strong><small>${escapeHtml(files.map(path => path.split("/").pop()).join(" · "))}</small><i>${status}</i><span class="label-queue-samples">${samples}</span></button>`;
-  }).join("") : `<div class="empty-state">${state.labelingAllQueue.length ? "没有符合筛选条件的文件，请调整 result 或 reason" : "请在设置页选择文件或文件夹"}</div>`;
+  }).join("") : `<div class="empty-state">${state.labelingAllQueue.length ? "没有符合筛选条件的文件，请调整子文件夹、result 或 reason" : "请在设置页选择文件或文件夹"}</div>`;
 }
 
 function resizeLabelSignalPlots() {
@@ -1714,15 +1763,18 @@ function scheduleLabelSignalResize() {
 }
 
 function switchLabelWorkflowTab(name) {
+  if ((name === "files" || name === "annotation") && !state.labelProjectId) return notify("请先选择并保存项目", "error");
   if (name === "annotation" && state.labelingQueueIndex >= 0) {
     const current = state.labelingQueue[state.labelingQueueIndex];
     const ready = labelQueueItemReady(current);
     if (!ready) return notify("请等待当前文件载入完成，再开始标注", "error");
     if (!state.labelingSessionPath) return notify("请先创建标注会话", "error");
   }
-  const pages = { settings: "#labelTabSettings", files: "#labelTabFiles", annotation: "#labelTabAnnotation" };
+  const pages = { projects: "#labelTabProjects", settings: "#labelTabSettings", files: "#labelTabFiles", annotation: "#labelTabAnnotation" };
   Object.entries(pages).forEach(([key, selector]) => { $(selector).hidden = key !== name; });
+  if (name === "files") renderLabelQueueFolderOptions();
   $$('[data-label-tab]').forEach(button => button.classList.toggle("is-active", button.dataset.labelTab === name));
+  $("#pageTitle").textContent = name === "projects" ? "项目列表" : name === "settings" ? $("#labelProjectSettingsTitle").textContent : name === "files" ? $("#labelProjectFilesTitle").textContent : "标注界面";
   if (name === "annotation") {
     scheduleLabelSignalResize();
     void loadCurrentLabelWaveforms();
@@ -1749,6 +1801,171 @@ async function enterLabelAnnotation(button = null) {
 
 function enableLabelTaskTabs() {
   // 三个页签始终可访问；未创建任务时显示空状态。
+}
+
+function renderLabelProjects() {
+  const host = $("#labelProjectsList");
+  host.innerHTML = state.labelProjects.length ? state.labelProjects.map(project =>
+    `<div class="label-project-card"><strong>${escapeHtml(project.name)}</strong><small>${escapeHtml(project.root_path)}</small><small>${escapeHtml(project.file_format.toUpperCase())} · ${escapeHtml(project.file_type)}</small><div class="label-project-actions"><button class="button button-primary" data-open-label-project="${escapeHtml(project.project_id)}" data-project-destination="files" type="button">进入标注</button><button class="button button-secondary" data-open-label-project="${escapeHtml(project.project_id)}" data-project-destination="settings" type="button">项目设置</button><button class="button button-ghost" data-delete-label-project="${escapeHtml(project.project_id)}" type="button">删除项目</button></div></div>`
+  ).join("") : '<div class="empty-state">暂无标注项目，点击“新建项目”选择数据根文件夹。</div>';
+}
+
+async function loadLabelProjects() {
+  const payload = await request(API.labelingProjects);
+  state.labelProjects = payload.projects || [];
+  renderLabelProjects();
+}
+
+async function deleteLabelProject(project, button) {
+  if (!window.confirm(`删除项目“${project.name}”？只删除项目列表记录，原始文件和标注 JSON 会保留。`)) return;
+  setBusy(button, true, "删除中…");
+  try {
+    await request(API.labelingProjectDelete(project.project_id), { method: "DELETE" });
+    state.labelProjectQueues.delete(project.project_id);
+    if (state.labelProjectId === project.project_id) { clearLabelProjectQueue(); state.labelProjectId = ""; }
+    await loadLabelProjects();
+    notify("项目记录已删除，文件和标注 JSON 已保留");
+  } catch (error) { notify(error.message, "error", true); }
+  finally { setBusy(button, false); }
+}
+
+function clearLabelProjectQueue() {
+  ++state.labelingResolveGeneration;
+  releaseLabelWorkspace();
+  state.labelingFile = null;
+  state.labelingFiles = [];
+  state.labelingQueue = [];
+  state.labelingAllQueue = [];
+  state.labelingQueueIndex = -1;
+  state.labelingQueueLabels = new Map();
+  state.labelingSourceSelection = null;
+  state.labelingSessionPath = "";
+  $("#labelQueueSearchInput").value = "";
+  $("#labelQueueFolderFilter").value = "";
+  renderLabelQueueFolderOptions();
+  renderLabelQueue();
+}
+
+async function openLabelProject(project = null, destination = "settings") {
+  if (guardPendingLabelEvents()) return;
+  const previousProject = state.labelProjects.find(item => item.project_id === state.labelProjectId);
+  if (previousProject && state.labelingSourceSelection?.paths) {
+    state.labelProjectQueues.set(previousProject.project_id, {
+      rootPath: previousProject.root_path, fileFormat: previousProject.file_format,
+      fileType: previousProject.file_type, paths: state.labelingSourceSelection.paths,
+    });
+  }
+  clearLabelProjectQueue();
+  state.labelProjectId = project?.project_id || "";
+  $("#labelProjectName").value = project?.name || "";
+  $("#labelSelectedSourcePath").value = project?.root_path || "";
+  $("#labelFileType").value = project?.file_format || "wav";
+  $("#labelProjectType").value = project?.file_type || "rail";
+  $("#labelWavProfileSelect").value = project?.file_type === "motor" ? "motor" : project?.file_type === "rail" ? "rail" : "";
+  for (const id of ["labelFileType", "labelProjectType", "labelWavProfileSelect"]) $(`#${id}`)._syncTouchPicker?.();
+  syncLabelLineField();
+  state.labelingHistoryPath = project?.history_path || "";
+  state.labelingHistorySelected = Boolean(project?.history_path);
+  $("#labelSelectedSessionPath").value = state.labelingHistoryPath;
+  $("#labelSessionSelectionStatus").textContent = state.labelingHistoryPath ? `当前项目：${state.labelingHistoryPath}` : "不选择则自动生成标注 JSON";
+  state.labelTaxonomy = { path: "", sourcePath: "", results: [], reasons: [] };
+  $("#labelSelectedJsonPath").value = project?.taxonomy_path || "";
+  $("#labelTaxonomyEditor").innerHTML = '<div class="empty-state">正在加载标签类别…</div>';
+  renderLabelTaxonomyEditor();
+  await loadLabelTaxonomy(project?.taxonomy_path || project?.root_path || "", { selectedPath: project?.taxonomy_path || "" });
+  $("#labelSelectedJsonPath").value = project?.taxonomy_path || "";
+  $("#labelJsonSelectionStatus").textContent = project?.taxonomy_path ? "已加载所选标签类别 JSON" : "默认：正常、异常、边界，可直接编辑";
+  $("#labelProjectSettingsTitle").textContent = `项目设置 · ${project?.name || "新项目"}`;
+  $("#labelProjectFilesTitle").textContent = `标注列表 · ${project?.name || "新项目"}`;
+  switchLabelWorkflowTab(project ? destination : "settings");
+  if (project && destination === "files") await refreshLabelProjectFiles(null, { force: false, quiet: true });
+}
+
+async function selectLabelProjectRoot(button) {
+  setBusy(button, true, "选择中…");
+  try {
+    const selected = await request(API.labelingSelectProjectRoot, { method: "POST" });
+    if (selected.path) {
+      $("#labelSelectedSourcePath").value = selected.path;
+      if (!state.labelTaxonomy.sourcePath) await loadLabelTaxonomy(selected.path, { selectedPath: "" });
+    }
+  } catch (error) { notify(error.message, "error", true); }
+  finally { setBusy(button, false); }
+}
+
+async function saveLabelProject(button, { advance = false } = {}) {
+  const name = $("#labelProjectName").value.trim();
+  const rootPath = $("#labelSelectedSourcePath").value.trim();
+  const fileFormat = $("#labelFileType").value;
+  const fileType = $("#labelProjectType").value;
+  if (!name || !rootPath) return notify("请填写项目名称并选择根文件夹", "error");
+  if (fileFormat === "wav" && fileType === "generic") return notify("WAV 项目请选择电机或滑轨类型", "error");
+  setBusy(button, true, "保存中…");
+  try {
+    const previous = state.labelProjects.find(item => item.project_id === state.labelProjectId);
+    const project = await request(API.labelingProjects, { method: "POST", body: {
+      project_id: state.labelProjectId || null, name, root_path: rootPath,
+      file_format: fileFormat, file_type: fileType,
+      taxonomy_path: state.labelTaxonomy.sourcePath || null,
+      history_path: state.labelingHistorySelected ? state.labelingHistoryPath : null,
+    } });
+    if (previous && (previous.root_path !== project.root_path || previous.file_format !== project.file_format || previous.file_type !== project.file_type)) clearLabelProjectQueue();
+    state.labelProjectId = project.project_id;
+    const activeTaxonomyRoot = state.labelTaxonomy.path.split("/").slice(0, -1).join("/");
+    if (!state.labelTaxonomy.sourcePath && activeTaxonomyRoot !== project.root_path) {
+      await loadLabelTaxonomy(project.root_path, { selectedPath: "" });
+    }
+    await loadLabelProjects();
+    $("#labelProjectSettingsTitle").textContent = `项目设置 · ${project.name}`;
+    $("#labelProjectFilesTitle").textContent = `标注列表 · ${project.name}`;
+    if (advance) {
+      switchLabelWorkflowTab("files");
+      await refreshLabelProjectFiles(null, { force: false, quiet: true });
+      notify("项目已保存，文件列表已加载");
+    } else notify("项目已保存");
+  } catch (error) { notify(error.message, "error", true); }
+  finally { setBusy(button, false); }
+}
+
+async function refreshLabelProjectFiles(button, { force = true, quiet = false } = {}) {
+  if (!state.labelProjectId) return notify("请先选择并保存项目", "error");
+  if (guardPendingLabelEvents()) return;
+  setBusy(button, true, "扫描中…");
+  try {
+    const project = state.labelProjects.find(item => item.project_id === state.labelProjectId);
+    if (!project) throw new Error("标注项目不存在");
+    const cached = state.labelProjectQueues.get(project.project_id);
+    const validCache = cached && cached.rootPath === project.root_path
+      && cached.fileFormat === project.file_format && cached.fileType === project.file_type;
+    const payload = !force && validCache ? cached : await request(API.labelingScanProject(state.labelProjectId), { method: "POST" });
+    if (force || !validCache) state.labelProjectQueues.set(project.project_id, {
+      rootPath: payload.root_path, fileFormat: project.file_format, fileType: project.file_type, paths: payload.paths || [],
+    });
+    clearLabelProjectQueue();
+    const paths = payload.paths || [];
+    const profile = project?.file_type === "generic" ? "" : project?.file_type || "";
+    state.labelingOutputDirectory = payload.root_path;
+    state.labelingQueue = groupLabelSources(paths, profile, project?.file_format === "wav");
+    state.labelingAllQueue = state.labelingQueue;
+    renderLabelQueueFolderOptions();
+    state.labelingQueueIndex = paths.length ? 0 : -1;
+    syncLabelLineField();
+    state.labelingSourceSelection = { mode: "folder", rootPath: payload.root_path, displayPath: payload.root_path, paths };
+    $("#labelTdmsPath").value = state.labelingQueue[0]?.path || "";
+    saveLastLabelSettings();
+    if (state.labelingHistoryPath) {
+      await refreshLabelQueueLabels();
+      state.labelingAllQueue.forEach(item => {
+        const labeled = (item.paths || [item.path]).filter(path => (state.labelingQueueLabels.get(path) || []).length > 0).length;
+        item.labeled = labeled === (item.paths || [item.path]).length;
+        item.partialLabeled = labeled > 0 && !item.labeled;
+      });
+    }
+    $("#labelFileListPanel").hidden = false;
+    renderLabelQueue();
+    if (!quiet) notify(`${force || !validCache ? "扫描完成" : "已加载"}：${paths.length} 个文件`);
+  } catch (error) { notify(error.message, "error", true); }
+  finally { setBusy(button, false); }
 }
 
 async function loadLabelQueueIndex(index, { force = false } = {}) {
@@ -1797,6 +2014,7 @@ async function selectLabelSources(mode, button) {
     $("#labelSessionJsonPath").textContent = state.labelingHistoryPath || "开始标注时自动生成";
     state.labelingQueue = groupLabelSources(paths, wavProfile, fileType === "wav");
     state.labelingAllQueue = state.labelingQueue;
+    renderLabelQueueFolderOptions();
     state.labelingQueueLabels = new Map();
     $("#labelQueueResultFilter").value = "";
     $("#labelQueueReasonFilter").value = "";
@@ -1900,6 +2118,7 @@ function labelReasonOptions(resultKey) {
   const reasons = state.labelingFile?.taxonomy?.reasons || {};
   return Object.entries(reasons)
     .filter(([, reason]) => reason.parent === resultKey)
+    .sort(([leftKey, left], [rightKey, right]) => compareReasonIds({ id: left.id, key: leftKey }, { id: right.id, key: rightKey }))
     .map(([key, reason]) => `<option value="${escapeHtml(key)}">${escapeHtml(reason.name)}</option>`)
     .join("");
 }
@@ -1927,7 +2146,7 @@ function labelEventFormStateFromAnnotation(annotation) {
   return {
     resultKey: latest.result_key || "",
     reasonKey: latest.reason_key || "",
-    confidence: Number.isFinite(Number(latest.result_confidence)) ? Number(latest.result_confidence) : 0.9,
+    confidence: latest.result_confidence != null && Number.isFinite(Number(latest.result_confidence)) ? Number(latest.result_confidence) : 0.9,
     note: latest.note || "",
     prototype: false,
     sourceTypeOverride: String(latest.source || "").startsWith("expert") ? "expert" : "",
@@ -2089,7 +2308,7 @@ function commitLabelEventItem(card, eventKey, saved, formState = null) {
 function setLabelEventSavePending(card, saving) {
   card.dataset.eventSavePending = saving ? "true" : "false";
   card.classList.toggle("is-saving-event", saving);
-  $$('[data-new-event], [data-label-whole], [data-close-event], [data-event-key], .label-event-block, .label-saved-event-row, [data-relabel-sample], [data-delete-label-event], [data-cancel-label], [data-quick-anomaly], [data-scope-start], [data-scope-duration], [data-label-result], [data-label-reason], input[type="radio"], [data-label-note], [data-event-boundary], [data-event-range-move]', card).forEach(control => {
+  $$('[data-new-event], [data-label-whole], [data-close-event], [data-event-key], .label-event-block, .label-saved-event-row, [data-relabel-sample], [data-confirm-label-event], [data-delete-label-event], [data-cancel-label], [data-quick-anomaly], [data-scope-start], [data-scope-duration], [data-label-result], [data-label-reason], input[type="radio"], [data-label-note], [data-event-boundary], [data-event-range-move]', card).forEach(control => {
     control.disabled = saving || (control.matches('[data-new-event], [data-label-whole], .label-event-block, .label-saved-event-row') && card.dataset.signalReady !== "true") || (control.matches('[data-quick-anomaly]') && !activeLabelEvent(card));
   });
 }
@@ -2196,7 +2415,7 @@ function populateLabelEventForm(card, sampleId) {
   if (latest.reason_key && Array.from(reason.options).some(option => option.value === latest.reason_key)) reason.value = latest.reason_key;
   result._syncTouchPicker?.();
   reason._syncTouchPicker?.();
-  const confidence = Number(latest.result_confidence);
+  const confidence = latest.result_confidence == null ? NaN : Number(latest.result_confidence);
   if (Number.isFinite(confidence)) {
     $$("input[type=radio]", card).forEach(input => { input.checked = Number(input.value) === confidence; });
   }
@@ -2223,7 +2442,7 @@ function labelHistoryMarkup(sample, file = state.labelingFile) {
       const entryResult = entry.result_name || entry.result_key || "未标注";
       const entryReason = entry.reason_name || entry.reason_key || "—";
       const entryConfidence = entry.result_confidence == null ? "—" : entry.result_confidence;
-      return `<div class="label-history-version"><b>第 ${eventIndex + 1} 次</b><span>${escapeHtml(entryResult)} / ${escapeHtml(entryReason)}</span><span>${escapeHtml(entry.source || "—")} · 置信度 ${escapeHtml(entryConfidence)}</span><span>${escapeHtml(entry.timestamp || "未记录时间")}${entry.note ? ` · ${escapeHtml(entry.note)}` : ""}</span><div class="label-history-version-actions"><button class="button button-secondary" data-relabel-sample="${escapeHtml(annotation.sample_id)}" data-label-event-uuid="${escapeHtml(entry.event_uuid || "")}" type="button">再次标注</button><button class="button button-ghost label-delete-event-button" data-delete-label-event="${escapeHtml(entry.event_uuid || "")}" data-event-sample="${escapeHtml(annotation.sample_id)}" type="button">删除标注</button></div></div>`;
+      return `<div class="label-history-version"><b>第 ${eventIndex + 1} 次</b><span>${escapeHtml(entryResult)} / ${escapeHtml(entryReason)}</span><span>${escapeHtml(entry.source || "—")} · 置信度 ${escapeHtml(entryConfidence)}</span><span>${escapeHtml(entry.timestamp || "未记录时间")}${entry.note ? ` · ${escapeHtml(entry.note)}` : ""}</span><div class="label-history-version-actions"><button class="button button-secondary" data-relabel-sample="${escapeHtml(annotation.sample_id)}" data-label-event-uuid="${escapeHtml(entry.event_uuid || "")}" type="button">编辑</button><button class="button button-secondary" data-confirm-label-event="${escapeHtml(entry.event_uuid || "")}" data-event-sample="${escapeHtml(annotation.sample_id)}" type="button">确认</button><button class="button button-ghost label-delete-event-button" data-delete-label-event="${escapeHtml(entry.event_uuid || "")}" data-event-sample="${escapeHtml(annotation.sample_id)}" type="button">删除</button></div></div>`;
     }).reverse().join("");
     return `<div class="label-history-group">
       <button class="label-history-row label-saved-event-row is-${kind}" data-event-sample-id="${escapeHtml(annotation.sample_id)}" data-event-start="${start}" data-event-end="${end}" type="button" title="单击选择，双击编辑标签">
@@ -2286,43 +2505,63 @@ function disposeLabelAudio(audio) {
   audio.removeAttribute("src");
 }
 
+function labelChannelDisplay(sample, file) {
+  const name = sample.display_name || sample.sample_id;
+  if (!file.absolute_path?.toLowerCase().endsWith(".wav")) return { number: sample.sample_id, title: name };
+  const index = Number(sample.locator?.channel_index);
+  if (!Number.isInteger(index) || index < 0) return { number: sample.sample_id, title: name };
+  const number = `channel_${index}`;
+  return { number, title: `${number} = ${name}` };
+}
+
+function labelLayoutContext(files) {
+  const profile = files.find(file => file.absolute_path?.toLowerCase().endsWith(".wav"))?.metadata?.wav_profile || selectedLabelWavProfile() || "tdms";
+  const layoutKey = `${profile}:${files.length}`;
+  const choices = files.flatMap((file, fileIndex) => (file.samples || []).map((sample, index) => ({
+    key: `${fileIndex}:${index}`, file, sample,
+    title: `${file.metadata?.direction ? `${file.metadata.direction} · ` : ""}${labelChannelDisplay(sample, file).title}`,
+  }))).filter(item => !item.sample.missing);
+  let settings = state.labelLayoutSettings.get(layoutKey);
+  if (!settings) {
+    const defaults = choices.filter(item => profile !== "motor" || Number(item.sample.locator?.channel_index) < 2);
+    const rows = defaults.length > 1 ? 2 : 1;
+    const columns = Math.max(1, Math.ceil(defaults.length / rows));
+    settings = { rows, columns, slots: defaults.map(item => item.key) };
+    state.labelLayoutSettings.set(layoutKey, settings);
+  }
+  return { choices, settings };
+}
+
 function renderLabelChannels() {
   const host = $("#labelChannelsRow");
   $$('[data-event-audio]', host).forEach(disposeLabelAudio);
   $$('[data-signal-plot]', host).forEach(plot => window.Plotly?.purge?.(plot));
   const firstResultKey = defaultLabelResultKey();
   const files = state.labelingFiles.length ? state.labelingFiles : [state.labelingFile].filter(Boolean);
-  const channelDisplay = (sample, file) => {
-    const name = sample.display_name || sample.sample_id;
-    if (!file.absolute_path?.toLowerCase().endsWith(".wav")) return { number: sample.sample_id, title: name };
-    const index = Number(sample.locator?.channel_index);
-    if (!Number.isInteger(index) || index < 0) return { number: sample.sample_id, title: name };
-    const number = `channel_${index}`;
-    return { number, title: `${number} = ${name}` };
-  };
-  const jumpOptions = files.flatMap((file, fileIndex) => (file.samples || []).map((sample, index) => {
-    const direction = file.metadata?.direction || (files.length > 1 ? file.relative_path?.split(/[\\/]/).pop() : "");
-    const display = channelDisplay(sample, file);
-    return `<button class="label-channel-jump-option" type="button" data-channel-jump="label-channel-${fileIndex}-${index}" ${sample.missing ? 'disabled title="该文件未包含此通道"' : ""}>${direction ? `<span>${escapeHtml(direction)}</span>` : ""}<strong>${escapeHtml(display.title)}</strong>${sample.missing ? "<small>缺失</small>" : ""}</button>`;
-  }));
-  $("#labelChannelJump").hidden = jumpOptions.length === 0;
-  $("#labelChannelJumpOptions").innerHTML = jumpOptions.join("");
-  const analysisChoices = files.flatMap((file, fileIndex) => (file.samples || []).map((sample, index) => sample.missing ? "" : `<option value="${fileIndex}:${index}">${escapeHtml(file.metadata?.direction ? `${file.metadata.direction} · ` : "")}${escapeHtml(sample.display_name || sample.sample_id)}</option>`)).join("");
+  const { choices, settings } = labelLayoutContext(files);
+  $("#labelGridRows").value = settings.rows;
+  $("#labelGridColumns").value = settings.columns;
+  host.style.setProperty("--layout-rows", settings.rows);
+  host.style.setProperty("--layout-columns", settings.columns);
+  $("#labelLayoutSlots").style.setProperty("--layout-columns", settings.columns);
+  $("#labelLayoutSlots").innerHTML = Array.from({ length: settings.rows * settings.columns }, (_, slotIndex) => `<label class="label-layout-slot"><span>位置 ${slotIndex + 1}</span><select data-layout-slot="${slotIndex}"><option value="">不显示</option>${choices.map(item => `<option value="${item.key}" ${settings.slots[slotIndex] === item.key ? "selected" : ""}>${escapeHtml(item.title)}</option>`).join("")}</select></label>`).join("");
+  const slotOrder = (fileIndex, index) => settings.slots.indexOf(`${fileIndex}:${index}`);
+  const analysisChoices = files.flatMap((file, fileIndex) => (file.samples || []).map((sample, index) => sample.missing || slotOrder(fileIndex, index) < 0 ? "" : `<option value="${fileIndex}:${index}">${escapeHtml(file.metadata?.direction ? `${file.metadata.direction} · ` : "")}${escapeHtml(labelChannelDisplay(sample, file).title)}</option>`)).join("");
   $("#labelAnalysisChannel").innerHTML = analysisChoices;
   $("#openNavigationAnalysisButton").disabled = !analysisChoices;
   host.innerHTML = files.map((file, fileIndex) => {
-    const isWav = file.absolute_path?.toLowerCase().endsWith(".wav");
     const wavDirection = file.metadata?.direction || "";
-    const groupHeading = files.length > 1 ? `<h3 class="label-paired-file-heading">${escapeHtml(file.relative_path)}${wavDirection ? ` · ${escapeHtml(wavDirection)}` : ""}</h3>` : "";
-    return groupHeading + (file.samples || []).map((sample, index) => {
+    return (file.samples || []).map((sample, index) => {
+    const position = slotOrder(fileIndex, index);
+    if (position < 0) return "";
     const sampleId = escapeHtml(sample.sample_id);
-    const display = channelDisplay(sample, file);
+    const display = labelChannelDisplay(sample, file);
     const scope = sample.sample_scope || {};
     const duration = Number(sample.duration_s || scope.end_s || 0);
     const arrow = sample.sample_id === "up" ? "↑" : sample.sample_id === "down" ? "↓" : "●";
-    if (sample.missing) return `<article id="label-channel-${fileIndex}-${index}" class="panel label-channel-col label-missing-channel"><div class="label-channel-head"><div class="label-channel-title"><span class="label-channel-arrow">${arrow}</span><div><p class="kicker">通道 · ${escapeHtml(wavDirection || "WAV")}</p><h3>${escapeHtml(display.title)}</h3></div></div><span class="badge badge-neutral">${escapeHtml(display.number)}</span></div><div class="empty-state">该 WAV 未包含此通道，保持为空</div></article>`;
+    if (sample.missing) return `<article id="label-channel-${fileIndex}-${index}" class="panel label-channel-col label-missing-channel" style="grid-row:${Math.floor(position / settings.columns) + 1};grid-column:${position % settings.columns + 1}"><div class="label-channel-head"><div class="label-channel-title"><span class="label-channel-arrow">${arrow}</span><div><p class="kicker">通道 · ${escapeHtml(wavDirection || "WAV")}</p><h3>${escapeHtml(display.title)}</h3></div></div><span class="badge badge-neutral">${escapeHtml(display.number)}</span></div><div class="empty-state">该 WAV 未包含此通道，保持为空</div></article>`;
     return `
-      <article id="label-channel-${fileIndex}-${index}" class="panel label-channel-col" tabindex="-1" data-label-sample="${sampleId}" data-label-file="${escapeHtml(file.absolute_path || "")}">
+      <article id="label-channel-${fileIndex}-${index}" class="panel label-channel-col" style="grid-row:${Math.floor(position / settings.columns) + 1};grid-column:${position % settings.columns + 1}" tabindex="-1" data-label-sample="${sampleId}" data-label-file="${escapeHtml(file.absolute_path || "")}">
         <div class="label-channel-topline">
         <div class="label-channel-head">
           <div class="label-channel-title"><span class="label-channel-arrow">${arrow}</span><div><p class="kicker">通道${wavDirection ? ` · ${escapeHtml(wavDirection)}` : ""}</p><h3>${escapeHtml(display.title)}</h3></div></div>
@@ -2394,6 +2633,7 @@ function loadCurrentLabelWaveforms() {
         if (token !== labelWaveformLoadToken || generation !== state.labelingResolveGeneration || $("#labelTabAnnotation").hidden) return;
         if (sample.missing) continue;
         const card = $$('[data-label-sample]', $("#labelChannelsRow")).find(item => item.dataset.labelFile === file.absolute_path && item.dataset.labelSample === sample.sample_id);
+        if (!card) continue;
         if (card?._labelSignal) continue;
         await loadLabelWaveform(sample, file, generation, token);
       }
@@ -3261,7 +3501,7 @@ async function resolveLabelTdms(button, addToQueue = true) {
   if (!path) return notify("请选择或输入文件路径", "error");
   if (isTdms && !line) return notify("请选择产线", "error");
   if (isWav && !queuedProfile && !selectedLabelWavProfile()) return notify("请选择 WAV 类型：电机或滑轨", "error");
-  if (addToQueue ? !discardPendingLabelEventsForFileChange() : guardPendingLabelEvents()) return;
+  if (!discardPendingLabelEventsForFileChange()) return;
   const generation = ++state.labelingResolveGeneration;
   releaseLabelWorkspace();
   state.labelingQueueLoading = true;
@@ -3297,7 +3537,6 @@ async function resolveLabelTdms(button, addToQueue = true) {
       payloads.push(payload);
     }
     const analysis = await request(API.labelingAnalysisCards);
-    if (generation !== state.labelingResolveGeneration) return;
     if (generation !== state.labelingResolveGeneration) return;
     state.labelingFiles = payloads;
     state.labelingFile = payloads[0];
@@ -3408,6 +3647,7 @@ async function saveSingleLabel(event, card) {
   try {
     const sessionPath = state.labelingSessionPath;
     if (!sessionPath) throw new Error("请先点击“开始标注”创建标注会话");
+    if (card.dataset.relabeling === "true") await requireLabelEditBackend();
     const saved = await request(API.labelingSave, {
       method: "POST",
       body: {
@@ -3418,6 +3658,8 @@ async function saveSingleLabel(event, card) {
         taxonomy_path: taxonomyPath,
         source_sample_id: sample.sample_id,
         sample_id: eventSampleId,
+        ...(card.dataset.relabeling === "true" && card.dataset.editEventUuid
+          ? { target_event_uuid: card.dataset.editEventUuid } : {}),
         sample_scope: { start_s: startS, end_s: endS },
         scope_kind: savingItem.scopeKind || "event",
         source,
@@ -3431,17 +3673,22 @@ async function saveSingleLabel(event, card) {
     });
     file.annotations = annotations;
     sample.label_events = sample.label_events || [];
+    const samplePosition = saved.replaced_event_uuid ? sample.label_events.findIndex(item => item.event_uuid === saved.replaced_event_uuid) : -1;
+    if (samplePosition >= 0) sample.label_events.splice(samplePosition, 1);
     sample.label_events.push(saved);
     const existingAnnotation = annotations.find(item => item.sample_id === saved.sample_id);
     if (existingAnnotation) {
       existingAnnotation.sample_scope = saved.sample_scope;
       existingAnnotation.label_events = existingAnnotation.label_events || [];
+      const annotationPosition = saved.replaced_event_uuid ? existingAnnotation.label_events.findIndex(item => item.event_uuid === saved.replaced_event_uuid) : -1;
+      if (annotationPosition >= 0) existingAnnotation.label_events.splice(annotationPosition, 1);
       existingAnnotation.label_events.push(saved);
     } else {
       annotations.push({ sample_id: saved.sample_id, sample_scope: saved.sample_scope, label_events: [saved] });
     }
     const committedItem = commitLabelEventItem(card, savingEventKey, saved, savingForm);
     card.dataset.relabeling = "false";
+    delete card.dataset.editEventUuid;
     if (editor.activeKey === committedItem?.key) {
       $("[data-scope-start]", card).value = String(committedItem.start);
       $("[data-scope-duration]", card).value = (committedItem.end - committedItem.start).toFixed(3);
@@ -3486,6 +3733,59 @@ async function saveSingleLabel(event, card) {
     setLabelEventSavePending(card, false);
     setBusy(button, false);
     if (card.dataset.relabeling !== "true") button.textContent = "保存标注";
+  }
+}
+
+async function requireLabelEditBackend() {
+  try {
+    const capability = await request(API.labelingEditCapability);
+    if (capability.annotator_upsert === true) return;
+  } catch (_) { /* The running service may still be the old version. */ }
+  throw new Error("当前 8030 服务尚未加载新的标注保存规则，请重启 AI-3.0 服务后再编辑或确认");
+}
+
+async function confirmSavedLabelEvent(card, button) {
+  const file = labelFileForCard(card);
+  const sampleId = button.dataset.eventSample;
+  const annotation = (file?.annotations || []).find(item => item.sample_id === sampleId);
+  const selected = annotation?.label_events?.find(item => item.event_uuid === button.dataset.confirmLabelEvent);
+  const sourceSample = file?.samples?.find(item => item.sample_id === card.dataset.labelSample);
+  if (!file || !sourceSample || !selected) return notify("未找到这条已保存的标注", "error");
+  if (guardPendingLabelEvents()) return;
+  setLabelEventSavePending(card, true);
+  setBusy(button, true, "确认中…");
+  try {
+    await requireLabelEditBackend();
+    const saved = await request(API.labelingSave, {
+      method: "POST",
+      body: {
+        path: file.absolute_path,
+        line: $("#labelLineSelect").value,
+        wav_profile: file.metadata?.wav_profile === "motor" || file.metadata?.wav_profile === "rail" ? file.metadata.wav_profile : null,
+        session_path: state.labelingSessionPath,
+        taxonomy_path: state.labelTaxonomy.path,
+        source_sample_id: sourceSample.sample_id,
+        sample_id: sampleId,
+        target_event_uuid: selected.event_uuid,
+        sample_scope: annotation.sample_scope,
+        scope_kind: selected.scope_kind || (sampleId.endsWith("_whole") ? "whole" : "event"),
+        source: currentLabelSource(),
+        result_key: selected.result_key,
+        result_confidence: selected.result_confidence,
+        reason_key: selected.reason_key,
+        reason_confidence: selected.reason_confidence,
+        note: selected.note || "",
+        prototype: Boolean(file.prototype),
+      },
+    });
+    setLabelEventSavePending(card, false);
+    await loadLabelQueueIndex(state.labelingQueueIndex, { force: true });
+    notify(saved.replaced_event_uuid ? "已更新当前标注员的记录" : "已新增当前标注员的确认记录");
+  } catch (error) {
+    notify(error.message, "error", true);
+  } finally {
+    setLabelEventSavePending(card, false);
+    setBusy(button, false);
   }
 }
 
@@ -4174,6 +4474,23 @@ async function saveScopeConditions({ quiet = false } = {}) {
 
 function bindEvents() {
   window.addEventListener("resize", scheduleLabelSignalResize);
+  $("#newLabelProjectButton").addEventListener("click", () => openLabelProject().catch(error => notify(error.message, "error", true)));
+  $("#backToLabelProjectsButton").addEventListener("click", () => { loadLabelProjects().then(() => switchLabelWorkflowTab("projects")).catch(error => notify(error.message, "error", true)); });
+  $("#labelProjectsList").addEventListener("click", event => {
+    const deleteButton = event.target.closest("[data-delete-label-project]");
+    if (deleteButton) {
+      const project = state.labelProjects.find(item => item.project_id === deleteButton.dataset.deleteLabelProject);
+      if (project) void deleteLabelProject(project, deleteButton);
+      return;
+    }
+    const button = event.target.closest("[data-open-label-project]");
+    if (!button) return;
+    const project = state.labelProjects.find(item => item.project_id === button.dataset.openLabelProject);
+    if (project) openLabelProject(project, button.dataset.projectDestination).catch(error => notify(error.message, "error", true));
+  });
+  $("#saveLabelProjectButton").addEventListener("click", event => saveLabelProject(event.currentTarget));
+  $("#nextLabelProjectButton").addEventListener("click", event => saveLabelProject(event.currentTarget, { advance: true }));
+  $("#refreshLabelProjectFilesButton").addEventListener("click", event => refreshLabelProjectFiles(event.currentTarget));
   $("#dataFilterPanel").addEventListener("toggle", event => {
     $(".filter-collapse-state", event.currentTarget).textContent = event.currentTarget.open ? "收起" : "展开";
   });
@@ -4242,8 +4559,12 @@ function bindEvents() {
     await openUpdateDialog();
   }));
   $("#selectLabelTdmsButton").addEventListener("click", event => selectLabelSources("files", event.currentTarget));
-  $("#selectLabelFolderButton").addEventListener("click", event => selectLabelSources("folder", event.currentTarget));
+  $("#selectLabelFolderButton").addEventListener("click", event => selectLabelProjectRoot(event.currentTarget));
   $("#labelFileType").addEventListener("change", () => { syncLabelLineField(); saveLastLabelSettings(); });
+  $("#labelProjectType").addEventListener("change", event => {
+    $("#labelWavProfileSelect").value = event.currentTarget.value === "generic" ? "" : event.currentTarget.value;
+    saveLastLabelSettings();
+  });
   $("#labelLineSelect").addEventListener("change", async event => {
     saveLastLabelSettings();
     if (!event.currentTarget.value || !state.labelingQueue.length) return;
@@ -4257,6 +4578,21 @@ function bindEvents() {
     await loadLabelQueueIndex(0, { force: true });
   });
   $("#selectLabelJsonButton").addEventListener("click", event => selectLabelJson(event.currentTarget));
+  $("#clearLabelJsonButton").addEventListener("click", async event => {
+    if (state.labelingQueueLoading || state.labelingConfigLoading || guardPendingLabelEvents()) return;
+    const button = event.currentTarget;
+    setBusy(button, true, "切换中…");
+    try {
+      await loadLabelTaxonomy($("#labelSelectedSourcePath").value.trim(), { selectedPath: "" });
+      $("#labelSelectedJsonPath").value = "";
+      $("#labelJsonSelectionStatus").textContent = "默认：正常、异常、边界，可直接编辑";
+      state.labelingSessionRequest = null;
+      state.labelingSessionPath = "";
+      saveLastLabelSettings();
+      if (state.labelingQueue.length) await loadLabelQueueIndex(state.labelingQueueIndex, { force: true });
+    } catch (error) { notify(error.message, "error", true); }
+    finally { setBusy(button, false); }
+  });
   $("#selectLabelSessionButton").addEventListener("click", event => selectLabelJson(event.currentTarget, true));
   $("#clearLabelSessionButton").addEventListener("click", () => {
     if (guardPendingLabelEvents()) return;
@@ -4285,6 +4621,12 @@ function bindEvents() {
   });
   $("#saveLabelTaxonomyButton").addEventListener("click", event => saveLabelTaxonomy(event.currentTarget));
   $("#labelTaxonomyEditor").addEventListener("input", syncLabelTaxonomyEditor);
+  $("#labelTaxonomyEditor").addEventListener("change", event => {
+    if (event.target.dataset.taxonomyField !== "reason_id") return;
+    syncLabelTaxonomyEditor();
+    state.labelTaxonomy.reasons.sort((a, b) => compareReasonIds({ id: a.reason_id, key: a.reason_key }, { id: b.reason_id, key: b.reason_key }));
+    renderLabelTaxonomyEditor();
+  });
   $("#labelTaxonomyEditor").addEventListener("click", event => {
     const button = event.target.closest("[data-delete-taxonomy]");
     if (!button) return;
@@ -4310,9 +4652,17 @@ function bindEvents() {
     catch (error) { notify(error.message, "error", true); }
   });
   $("#clearLabelQueueFilterButton").addEventListener("click", async () => {
+    $("#labelQueueSearchInput").value = "";
+    $("#labelQueueFolderFilter").value = "";
     $("#labelQueueResultFilter").value = "";
     $("#labelQueueReasonFilter").value = "";
+    for (const id of ["labelQueueFolderFilter", "labelQueueResultFilter", "labelQueueReasonFilter"]) $(`#${id}`)._syncTouchPicker?.();
     await applyLabelQueueFilter();
+  });
+  let labelQueueSearchTimer;
+  $("#labelQueueSearchInput").addEventListener("input", () => {
+    clearTimeout(labelQueueSearchTimer);
+    labelQueueSearchTimer = setTimeout(() => void applyLabelQueueFilter(), 200);
   });
   $("#labelQueueResultFilter").addEventListener("change", event => {
     if (event.currentTarget.value === "__unlabeled__") $("#labelQueueReasonFilter").value = "";
@@ -4354,6 +4704,18 @@ function bindEvents() {
     setLabelPlaybackRate(Number(navigationSpeed.value) + (event.deltaY < 0 ? 0.1 : -0.1));
   }, { passive: false });
   $("#labelPlaybackVolume").addEventListener("input", event => setLabelPlaybackVolume(event.currentTarget.value));
+  $("#labelLayoutSlots").addEventListener("change", event => {
+    if (!event.target.matches("[data-layout-slot]")) return;
+    const files = state.labelingFiles.length ? state.labelingFiles : [state.labelingFile].filter(Boolean);
+    const { settings } = labelLayoutContext(files);
+    const index = Number(event.target.dataset.layoutSlot);
+    if (guardPendingLabelEvents()) { event.target.value = settings.slots[index] || ""; return; }
+    if (event.target.value) settings.slots = settings.slots.map((key, slot) => slot !== index && key === event.target.value ? "" : key);
+    settings.slots[index] = event.target.value;
+    ++labelWaveformLoadToken;
+    labelWaveformLoadTask = null;
+    renderLabelChannels();
+  });
   $("#labelLowFrequencyFilter").addEventListener("click", async event => {
     if (state.labelingQueueLoading || guardPendingLabelEvents()) return;
     const button = event.currentTarget;
@@ -4392,40 +4754,20 @@ function bindEvents() {
       $("#annotationJumpIndex").value = state.labelingQueueIndex >= 0 ? state.labelingQueueIndex + 1 : "";
     }
   });
-  $$('.label-layout-switch [data-channel-layout]').forEach(button => button.addEventListener("click", () => {
-    const host = $("#labelChannelsRow");
-    if (button.dataset.channelLayout === "grid") {
-      const rows = Number($("#labelGridRows").value);
-      const columns = Number($("#labelGridColumns").value);
-      if (![rows, columns].every(value => Number.isInteger(value) && value >= 1 && value <= 8)) {
-        notify("行数和列数请输入 1 到 8 的整数", "error");
-        return;
-      }
-      host.style.setProperty("--layout-rows", rows);
-      host.style.setProperty("--layout-columns", columns);
-    }
-    host.dataset.channelLayout = button.dataset.channelLayout;
-    $$('.label-layout-switch [data-channel-layout]').forEach(item => {
-      item.classList.toggle("button-primary", item === button);
-      item.classList.toggle("button-ghost", item !== button);
-    });
+  $("#applyLabelLayoutButton").addEventListener("click", () => {
+    const rows = Number($("#labelGridRows").value);
+    const columns = Number($("#labelGridColumns").value);
+    if (![rows, columns].every(value => Number.isInteger(value) && value >= 1 && value <= 8)) return notify("行数和列数请输入 1 到 8 的整数", "error");
+    if (guardPendingLabelEvents()) return;
+    const files = state.labelingFiles.length ? state.labelingFiles : [state.labelingFile].filter(Boolean);
+    const { settings } = labelLayoutContext(files);
+    settings.rows = rows;
+    settings.columns = columns;
+    settings.slots.length = rows * columns;
+    ++labelWaveformLoadToken;
+    labelWaveformLoadTask = null;
+    renderLabelChannels();
     scheduleLabelSignalResize();
-  }));
-  $("#labelChannelJumpOptions").addEventListener("click", event => {
-    const button = event.target.closest("[data-channel-jump]");
-    if (!button || button.disabled) return;
-    const card = document.getElementById(button.dataset.channelJump);
-    if (!card) return;
-    $("#labelAnalysisChannel").value = button.dataset.channelJump.replace("label-channel-", "").replace("-", ":");
-    $$("#labelChannelJumpOptions [data-channel-jump]").forEach(item => {
-      item.classList.toggle("is-active", item === button);
-      if (item === button) item.setAttribute("aria-current", "true");
-      else item.removeAttribute("aria-current");
-    });
-    card.scrollIntoView({ behavior: "smooth", block: "start", inline: "nearest" });
-    card.focus({ preventScroll: true });
-    card.classList.add("is-jump-target");
-    window.setTimeout(() => card.classList.remove("is-jump-target"), 1200);
   });
   $("#labelChannelsRow").addEventListener("change", event => {
     const result = event.target.closest("[data-label-result]");
@@ -4458,12 +4800,13 @@ function bindEvents() {
   $("#labelChannelsRow").addEventListener("click", async event => {
     const card = event.target.closest("[data-label-sample]");
     if (!card) return;
-    if (card.dataset.eventSavePending === "true" && event.target.closest('[data-new-event], [data-label-whole], [data-close-event], [data-event-key], .label-event-block, .label-saved-event-row, [data-relabel-sample], [data-delete-label-event], [data-cancel-label], [data-quick-anomaly]')) {
+    if (card.dataset.eventSavePending === "true" && event.target.closest('[data-new-event], [data-label-whole], [data-close-event], [data-event-key], .label-event-block, .label-saved-event-row, [data-relabel-sample], [data-confirm-label-event], [data-delete-label-event], [data-cancel-label], [data-quick-anomaly]')) {
       notify("当前事件正在保存，请稍候", "error");
       return;
     }
     if (event.target.closest("[data-close-event]")) {
       card.dataset.relabeling = "false";
+      delete card.dataset.editEventUuid;
       captureActiveLabelEventForm(card);
       const editor = ensureLabelEventEditor(card);
       const activeItem = activeLabelEvent(card);
@@ -4500,6 +4843,11 @@ function bindEvents() {
       await deleteSavedLabelEvent(card, deleteButton);
       return;
     }
+    const confirmButton = event.target.closest("[data-confirm-label-event]");
+    if (confirmButton) {
+      await confirmSavedLabelEvent(card, confirmButton);
+      return;
+    }
     const relabelButton = event.target.closest("[data-relabel-sample]");
     if (relabelButton) {
       const item = labelEventItemForSample(card, relabelButton.dataset.relabelSample);
@@ -4513,8 +4861,9 @@ function bindEvents() {
       item.dirty = false;
       $("[data-signal-plot]", card)._selectLabelEventItem?.(item.key, true);
       card.dataset.relabeling = "true";
+      card.dataset.editEventUuid = selectedEvent.event_uuid;
       $("[data-signal-plot]", card)._activateEventSelection?.(item.committedStart, item.committedEnd);
-      $("[data-save-label]", card).textContent = "保存新标注";
+      $("[data-save-label]", card).textContent = "保存编辑";
       $(".label-channel-form", card).scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
@@ -4571,7 +4920,7 @@ function bindEvents() {
     } else if (event.target.closest("[data-quick-anomaly]")) {
       const results = state.labelingFile?.taxonomy?.results || {};
       const abnormalKey = Object.entries(results).find(([key, value]) => key === "nok" || String(value.name).includes("异常"))?.[0];
-      if (!abnormalKey) return notify("label.json 中没有定义异常结果", "error");
+      if (!abnormalKey) return notify("标签类别中没有定义异常结果", "error");
       card.dataset.prototype = "true";
       card.dataset.eventSourceTypeOverride = "expert";
       $("[data-label-result]", card).value = abnormalKey;
@@ -4850,7 +5199,7 @@ function enhanceLabelTouchSelect(select) {
 }
 
 function enhanceLabelSettingSelects() {
-  for (const id of ["labelSourceType", "labelFileType", "labelLineSelect", "labelWavProfileSelect"]) enhanceLabelTouchSelect($(`#${id}`));
+  for (const id of ["labelSourceType", "labelFileType", "labelProjectType", "labelLineSelect", "labelWavProfileSelect", "labelQueueFolderFilter", "labelQueueResultFilter", "labelQueueReasonFilter"]) enhanceLabelTouchSelect($(`#${id}`));
   document.addEventListener("pointerdown", event => {
     if (event.target.closest(".label-touch-picker")) return;
     document.querySelectorAll(".label-touch-picker-options").forEach(menu => { menu.hidden = true; menu.previousElementSibling?.setAttribute("aria-expanded", "false"); });
@@ -4877,9 +5226,8 @@ async function start() {
   if (state.currentView === "labeling") {
     try {
       await loadStatus();
-      syncLabelLineField();
-      if (state.labelingRestoredTaxonomyPath) await loadLabelTaxonomy(state.labelingRestoredTaxonomyPath);
-      await loadRestoredLabelQueue();
+      await loadLabelProjects();
+      switchLabelWorkflowTab("projects");
     } catch (error) { notify(`标签配置加载失败：${error.message}`, "error", true); }
   } else {
     await refreshAll(false);

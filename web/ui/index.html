@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>AI-3.0 · 数据库</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260930-105">
+  <link rel="stylesheet" href="/static/app.css?v=20261001-146">
 </head>
 <body>
   <div class="app-shell">
@@ -14,7 +14,7 @@
       <nav class="nav-list">
         <button class="nav-item is-active" type="button" data-view="databases"><span class="nav-number">01</span><span>数据库</span></button>
         <button class="nav-item" type="button" data-view="labeling"><span class="nav-number">02</span><span>音频标注</span></button>
-        <div class="label-workflow-tabs" aria-label="音频标注步骤"><button class="label-workflow-tab is-active" data-label-tab="settings" type="button"><span>1</span>设置</button><button class="label-workflow-tab" data-label-tab="files" type="button"><span>2</span>文件列表</button><button class="label-workflow-tab" data-label-tab="annotation" type="button"><span>3</span>标注界面</button></div>
+        <div class="label-workflow-tabs" aria-label="音频标注步骤"><button class="label-workflow-tab is-active" data-label-tab="projects" type="button"><span>1</span>项目列表</button><button class="label-workflow-tab" data-label-tab="settings" type="button"><span>2</span>项目设置</button><button class="label-workflow-tab" data-label-tab="files" type="button"><span>3</span>标注列表</button><button class="label-workflow-tab" data-label-tab="annotation" type="button"><span>4</span>标注界面</button></div>
       </nav>
       <div class="sidebar-foot" data-database-only><span id="sidebarMountDot" class="status-dot is-unknown"></span><span id="sidebarMountText">正在读取数据库状态…</span></div>
     </aside>
@@ -118,57 +118,77 @@
       </section>
 
       <section id="view-labeling" class="view labeling-page-view">
-        <section id="labelTabSettings" class="label-tab-page">
+        <section id="labelTabProjects" class="label-tab-page">
+          <article class="panel label-projects-panel"><div class="panel-heading"><div><p class="kicker">音频标注</p><h2>项目列表</h2></div><button id="newLabelProjectButton" class="button button-primary" type="button">＋ 新建项目</button></div><div id="labelProjectsList" class="label-project-list"><div class="empty-state">正在读取项目…</div></div></article>
+        </section>
+        <section id="labelTabSettings" class="label-tab-page" hidden>
+        <div class="label-project-heading"><h2 id="labelProjectSettingsTitle">项目设置 · 新项目</h2><button id="backToLabelProjectsButton" class="button button-ghost" type="button">← 项目列表</button></div>
         <div class="label-settings-primary-grid">
-        <article class="panel label-session-source">
-          <div class="panel-heading"><h3>A、设置标注员工</h3><strong id="labelSourcePreview" class="badge badge-info" hidden>operator</strong></div>
-          <div class="label-source-row">
-            <label><span>标注人员类型</span><select id="labelSourceType"><option value="operator">员工</option><option value="expert">专家</option></select></label>
-            <label><span>员工标识</span><input id="labelSourceIdentity" type="text" maxlength="80" placeholder="姓名或工号"></label>
-          </div>
-        </article>
+
         <article class="panel label-json-config-card">
-          <div class="panel-heading"><h3>B、设置标签类别和导入标签</h3></div>
+          <div class="panel-heading"><h3>2. 标签类别和导入标签</h3></div>
           <div class="label-json-select-row label-optional-json-row"><input id="labelSelectedSessionPath" type="text" aria-label="标注 JSON 路径" placeholder="不选择则自动生成标注 JSON" readonly><button id="selectLabelSessionButton" class="button button-secondary" type="button">选择标注 JSON</button><button id="clearLabelSessionButton" class="button button-ghost" type="button">取消选择</button></div>
           <small id="labelSessionSelectionStatus">选择后直接写入所选文件</small>
-          <div class="label-json-select-row"><input id="labelSelectedJsonPath" type="text" placeholder="请选择标签类别 JSON" readonly><button id="selectLabelJsonButton" class="button button-secondary" type="button">选择标签类别 JSON</button></div><small id="labelJsonSelectionStatus" hidden></small>
+          <div class="label-json-select-row label-optional-json-row"><input id="labelSelectedJsonPath" type="text" placeholder="不选择则使用默认标签类别" readonly><button id="selectLabelJsonButton" class="button button-secondary" type="button">选择标签类别 JSON</button><button id="clearLabelJsonButton" class="button button-ghost" type="button">取消选择</button></div><small id="labelJsonSelectionStatus"></small>
           <details class="label-taxonomy-card">
             <summary class="label-taxonomy-summary"><span><strong>高级：编辑标签类别</strong></span><span class="label-taxonomy-chevron" aria-hidden="true">⌄</span></summary>
-            <div class="label-taxonomy-content"><code id="labelTaxonomyPath" class="mono-note">请先选择标签类别 JSON</code>
+            <div class="label-taxonomy-content"><code id="labelTaxonomyPath" class="mono-note">正在加载项目默认标签类别…</code>
               <div class="label-taxonomy-actions"><button id="addLabelResultButton" class="button button-secondary" type="button">＋ 增加 result</button><button id="addLabelReasonButton" class="button button-secondary" type="button">＋ 增加 reason</button><button id="saveLabelTaxonomyButton" class="button button-primary" type="button" disabled>保存标签类别</button></div>
-              <div id="labelTaxonomyEditor" class="label-taxonomy-editor"><div class="empty-state">首次请手动选择标签类别 JSON</div></div>
+              <div id="labelTaxonomyEditor" class="label-taxonomy-editor"><div class="empty-state">正在加载标签类别…</div></div>
             </div>
           </details>
         </article>
         <article class="panel label-data-source-card">
-          <div class="panel-heading"><h3>C、选择标注件类型和路径</h3></div>
+          <div class="panel-heading"><h3>1. 数据源</h3></div>
+          <label><span>项目名称</span><input id="labelProjectName" type="text" maxlength="120" placeholder="输入项目名称"></label>
           <div class="label-type-parse-row">
-            <label><span>标注件类型</span><select id="labelFileType"><option value="tdms">TDMS / TDMS.ZST</option><option value="wav">WAV</option></select></label>
-            <label id="labelLineField"><span>解析方式：产线</span><select id="labelLineSelect" disabled><option value="">请选择产线</option></select></label>
+            <label><span>文件格式</span><select id="labelFileType"><option value="tdms">TDMS / TDMS.ZST</option><option value="wav">WAV</option></select></label>
+            <label><span>文件类型</span><select id="labelProjectType"><option value="generic">通用</option><option value="rail">滑轨</option><option value="motor">电机</option></select></label>
             <label id="labelWavProfileField" hidden><span>解析方式：WAV 类型</span><select id="labelWavProfileSelect"><option value="">请选择类型</option><option value="motor">电机</option><option value="rail">滑轨</option></select></label>
           </div>
-          <div class="label-path-actions"><button id="selectLabelTdmsButton" class="button button-secondary" type="button">选择文件</button><button id="selectLabelFolderButton" class="button button-secondary" type="button">选择文件夹</button></div>
-          <div class="label-file-path-row"><input id="labelSelectedSourcePath" type="text" aria-label="标注件路径" placeholder="标注件路径" readonly><input id="labelTdmsPath" type="hidden"><button id="loadLabelTdmsButton" type="button" hidden></button></div>
-          <div class="label-source-ready"><span id="labelSettingsSelectionStatus">尚未选择文件</span><button id="startLabelingFromSettingsButton" class="button button-primary" type="button" disabled>下一步 →</button></div>
+          <div class="label-project-root-row"><button id="selectLabelTdmsButton" class="button button-secondary" type="button" hidden>选择文件</button><button id="selectLabelFolderButton" class="button button-secondary" type="button">选择根文件夹</button><input id="labelSelectedSourcePath" type="text" aria-label="项目根文件夹" placeholder="项目根文件夹" readonly></div>
+          <input id="labelTdmsPath" type="hidden"><button id="loadLabelTdmsButton" type="button" hidden></button>
+          <div class="label-source-ready"><span id="labelSettingsSelectionStatus">保存项目后，在标注列表刷新文件</span><button id="startLabelingFromSettingsButton" class="button button-primary" type="button" hidden disabled>下一步 →</button></div>
         </article>
         </div>
+        <div class="label-project-footer"><button id="saveLabelProjectButton" class="button button-secondary" type="button">保存</button><button id="nextLabelProjectButton" class="button button-primary" type="button">下一步 →</button></div>
         </section>
         <section id="labelTabFiles" class="label-tab-page" hidden>
+        <article class="panel label-session-source">
+          <div class="panel-heading"><h3>A、设置标注员工</h3><strong id="labelSourcePreview" class="badge badge-info" hidden>operator</strong></div>
+          <div class="label-source-row">
+            <label><span>标注人员类型</span><select id="labelSourceType"><option value="operator">员工</option><option value="expert">专家</option></select></label>
+            <label><span>标注员标识（用于区分）</span><input id="labelSourceIdentity" type="text" maxlength="80" placeholder="姓名或工号；留空则同类型视为同一人"></label>
+          </div>
+        </article>
+        <div id="labelLineField" class="panel" hidden><label><span>解析方式：产线</span><select id="labelLineSelect" disabled><option value="">请选择产线</option></select></label></div>
+        <div class="label-project-heading"><h2 id="labelProjectFilesTitle">标注列表</h2><button id="refreshLabelProjectFilesButton" class="button button-secondary" type="button">刷新文件</button></div>
         <article class="label-queue-toolbar">
           <button id="toggleLabelFileListButton" class="button button-ghost" type="button">← 列表</button><button id="previousLabelFileButton" class="button button-ghost" type="button" disabled>← 上一条</button>
           <div class="label-queue-progress"><strong id="labelQueuePosition">文件 0/0</strong><span id="labelQueueProgressText">标注进度 0/0（0%）</span><div><i id="labelQueueProgressBar"></i></div></div>
           <button id="nextLabelFileButton" class="button button-ghost" type="button" disabled>下一条 →</button><label class="label-goto">前往第 <input id="labelGotoIndex" type="number" min="1" value="1"> 个文件</label><button id="gotoLabelFileButton" class="button button-ghost" type="button">前往</button><button id="startLabelingFromListButton" class="button button-primary" type="button" disabled>开始标注</button>
         </article>
-        <article id="labelFileListPanel" class="panel"><div class="panel-heading"><div><p class="kicker">任务文件</p><h3>待标注文件列表</h3></div><span id="labelFileListCount" class="badge badge-neutral">0 个文件</span></div><div class="label-session-json">当前文件标注 JSON：<code id="labelSessionJsonPath">载入文件后显示</code></div><div class="label-queue-filter"><label><span>result</span><select id="labelQueueResultFilter"><option value="">全部结果</option><option value="__unlabeled__">未标注</option></select></label><label><span>reason</span><select id="labelQueueReasonFilter"><option value="">全部原因</option></select></label><button id="applyLabelQueueFilterButton" class="button button-primary" type="button">应用筛选</button><button id="clearLabelQueueFilterButton" class="button button-secondary" type="button">清除筛选</button><span id="labelQueueFilterStatus">显示全部文件</span></div><div id="labelFileQueueList" class="label-file-queue-list"><div class="empty-state">请先在“设置”中创建任务</div></div></article>
+        <article id="labelFileListPanel" class="panel">
+          <div class="panel-heading"><div><p class="kicker">任务文件</p><h3>待标注文件列表</h3></div><span id="labelFileListCount" class="badge badge-neutral">0 个文件</span></div>
+          <div class="label-session-json">当前文件标注 JSON：<code id="labelSessionJsonPath">载入文件后显示</code></div>
+          <div class="label-queue-filter">
+            <label><span>文件名搜索</span><input id="labelQueueSearchInput" type="search" placeholder="输入文件名，忽略大小写" autocomplete="off"></label>
+            <label><span>子文件夹</span><select id="labelQueueFolderFilter"><option value="">全部子文件夹</option></select></label>
+            <label><span>result</span><select id="labelQueueResultFilter"><option value="">全部结果</option><option value="__unlabeled__">未标注</option></select></label>
+            <label><span>reason</span><select id="labelQueueReasonFilter"><option value="">全部原因</option></select></label>
+            <button id="applyLabelQueueFilterButton" class="button button-primary" type="button">应用筛选</button><button id="clearLabelQueueFilterButton" class="button button-secondary" type="button">清除筛选</button><span id="labelQueueFilterStatus">显示全部文件</span>
+          </div>
+          <div id="labelFileQueueList" class="label-file-queue-list"><div class="empty-state">请先在“设置”中创建任务</div></div>
+        </article>
         </section>
         <section id="labelTabAnnotation" class="label-tab-page" hidden>
         <div id="labelAnnotationEmpty" class="panel empty-state">请先在“设置”中选择 TDMS、TDMS.ZST 或 WAV 文件。</div>
         <section id="singleLabelWorkspace" hidden>
           <article class="panel label-navigation-card">
             <div class="panel-heading"><div><p class="kicker">导航区</p><h3 id="labelCurrentFile">—</h3></div><div class="label-current-actions"><button id="annotationPreviousButton" class="button button-ghost" type="button">← 上一条</button><div class="label-navigation-position"><form id="annotationJumpForm" class="label-navigation-jump"><input id="annotationJumpIndex" type="number" min="1" step="1" aria-label="跳转到第几条" required><span>/ <strong id="annotationQueueTotal">0</strong></span><button id="annotationJumpButton" class="button button-secondary" type="submit">跳转</button></form><span id="labelFileCondition" class="badge badge-neutral"></span></div><button id="annotationNextButton" class="button button-ghost" type="button">下一条 →</button></div></div>
-            <div class="label-navigation-tools"><label class="audio-speed-control" title="只改变试听速度，不改变标注时间"><span>播放速度</span><input id="labelPlaybackSpeed" data-playback-speed type="range" min="0.1" max="2" step="0.1" value="1"><output data-playback-speed-value>1.0×</output></label><label class="audio-volume-control"><span>播放音量</span><input id="labelPlaybackVolume" type="range" min="0" max="500" step="1" value="100"><output id="labelPlaybackVolumeValue">100%</output></label><button id="labelLowFrequencyFilter" class="button button-secondary label-filter-toggle" type="button" aria-pressed="false" title="开启时以 20 Hz 高通去除低频，Mel 和播放使用滤波数据">低频滤波（20 Hz 高通）：否</button><div class="label-navigation-analysis"><label for="labelAnalysisChannel">分析通道</label><select id="labelAnalysisChannel" aria-label="高级分析通道"></select><button id="openNavigationAnalysisButton" class="button button-secondary" type="button">高级分析</button></div></div>
+            <div class="label-navigation-tools"><label class="audio-speed-control" title="只改变试听速度，不改变标注时间"><span>播放速度</span><input id="labelPlaybackSpeed" data-playback-speed type="range" min="0.1" max="2" step="0.1" value="1"><output data-playback-speed-value>1.0×</output></label><label class="audio-volume-control"><span>播放音量</span><input id="labelPlaybackVolume" type="range" min="0" max="500" step="1" value="100"><output id="labelPlaybackVolumeValue">100%</output></label><button id="labelLowFrequencyFilter" class="button button-secondary label-filter-toggle" type="button" aria-pressed="false" title="开启时以 20 Hz 高通去除低频，Mel 和播放使用滤波数据">低频滤波（20 Hz 高通）：否</button><details id="labelLayoutPanel" class="label-layout-panel"><summary class="button button-secondary">布置面板</summary><div class="label-layout-panel-body"><div class="label-grid-layout"><span>行列</span><input id="labelGridRows" type="number" min="1" max="8" step="1" value="2" aria-label="行数"><span>×</span><input id="labelGridColumns" type="number" min="1" max="8" step="1" value="2" aria-label="列数"><button id="applyLabelLayoutButton" class="button button-primary" type="button">应用</button></div><div id="labelLayoutSlots" class="label-layout-slots"></div></div></details><div class="label-navigation-analysis"><label for="labelAnalysisChannel">分析通道</label><select id="labelAnalysisChannel" aria-label="高级分析通道"></select><button id="openNavigationAnalysisButton" class="button button-secondary" type="button">高级分析</button></div></div>
           </article>
-          <section class="label-annotation-area"><div class="label-area-title"><p class="kicker">标注区</p><div class="label-area-controls"><div class="label-layout-switch" role="group" aria-label="通道排列"><div class="label-grid-layout"><input id="labelGridRows" type="number" min="1" max="8" step="1" value="2" aria-label="行数"><span>×</span><input id="labelGridColumns" type="number" min="1" max="8" step="1" value="2" aria-label="列数"><button class="button button-primary" data-channel-layout="grid" type="button">应用</button></div><button class="button button-ghost" data-channel-layout="column" type="button">N×1</button><button class="button button-ghost" data-channel-layout="row" type="button">1×N</button></div><nav id="labelChannelJump" class="label-channel-jump" aria-label="跳转通道" hidden><span class="label-channel-jump-label">跳转通道</span><div id="labelChannelJumpOptions" class="label-channel-jump-options"></div></nav></div></div><div id="labelChannelsRow" class="label-channels-row" data-channel-layout="grid" style="--layout-rows:2;--layout-columns:2"></div></section>
+          <section class="label-annotation-area"><div class="label-area-title"><p class="kicker">标注区</p></div><div id="labelChannelsRow" class="label-channels-row" style="--layout-rows:2;--layout-columns:2"></div></section>
         </section>
         </section>
       </section>
@@ -346,6 +366,6 @@
   </template>
 
   <script src="/static/lib/plotly.min.js" defer></script>
-  <script src="/static/app.js?v=20261001-135" defer></script>
+  <script src="/static/app.js?v=20261001-153" defer></script>
 </body>
 </html>

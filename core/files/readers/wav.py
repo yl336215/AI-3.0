@@ -49,7 +49,7 @@ def describe_wav(path: str | Path, profile: str | None = None) -> dict[str, obje
         profile = "generic"
         mappings = [
             {"index": index, "sample_id": "audio" if info.channels == 1 else f"channel_{index + 1}",
-             "display_name": "Audio" if info.channels == 1 else f"Channel {index + 1}"}
+             "display_name": "Audio" if info.channels == 1 else f"Channel {index}"}
             for index in range(info.channels)
         ]
     suffix = source.stem.lower().rsplit("-", 1)[-1]

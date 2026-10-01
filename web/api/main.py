@@ -61,6 +61,7 @@ from .models import (
     ImportRequest,
     LabelEventCreateRequest,
     LabelEventDeleteRequest,
+    LabelProjectSaveRequest,
     LabelSessionCreateRequest,
     LabelTaxonomyUpdateRequest,
     ReconcileApplyRequest,
@@ -94,7 +95,7 @@ LABEL_REASONS = {
     "noisy_normal": {"id": -1, "name": "干扰", "parent": "ok"},
     "clean_normal": {"id": 0, "name": "正常", "parent": "ok"},
     "boundary": {"id": 2, "name": "边界", "parent": "boundary"},
-    "sensor_error": {"id": 101, "name": "传感器错误", "parent": "nok"},
+    "unlabeled": {"id": 101, "name": "未标注", "parent": "nok"},
     "tick_tock": {"id": 102, "name": "秒表", "parent": "nok"},
     "friction": {"id": 103, "name": "摩擦", "parent": "nok"},
     "friction_acc": {"id": 104, "name": "摩擦acc", "parent": "nok"},
@@ -129,9 +130,7 @@ def _default_label_taxonomy() -> dict[str, Any]:
 def _label_taxonomy_path(source: Path) -> Path:
     if source.suffix.lower() == ".json":
         return source
-    data_dir = USER_DATA_ROOT
-    data_dir.mkdir(parents=True, exist_ok=True)
-    return data_dir / "label.json"
+    return (source if source.is_dir() else source.parent) / "label_setting.json"
 
 
 def _validate_label_taxonomy(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -171,12 +170,9 @@ def _load_label_taxonomy(source: Path) -> tuple[Path, dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         taxonomy = _validate_label_taxonomy(payload)
     else:
-        legacy_path = path.with_name("labels.json")
-        if legacy_path.is_file():
-            taxonomy = _validate_label_taxonomy(json.loads(legacy_path.read_text(encoding="utf-8")))
-        else:
-            taxonomy = _default_label_taxonomy()
-        _write_standalone_labels(path, taxonomy)
+        taxonomy = _default_label_taxonomy()
+        if source.is_dir():
+            _write_standalone_labels(path, taxonomy)
     return path, taxonomy
 
 
@@ -1777,6 +1773,103 @@ def _label_session_relative(source: Path, session_path: Path) -> str:
         return source.name
 
 
+def _label_projects_path() -> Path:
+    return USER_DATA_ROOT / "label_projects.json"
+
+
+def _read_label_projects() -> list[dict[str, Any]]:
+    payload = _read_standalone_labels(_label_projects_path())
+    projects = payload.get("projects", [])
+    if not isinstance(projects, list):
+        raise ValueError("标注项目列表格式无效")
+    return projects
+
+
+@app.get("/api/labeling/projects")
+def list_label_projects() -> dict[str, Any]:
+    try:
+        return {"projects": _read_label_projects()}
+    except Exception as exc:
+        raise _safe_error(exc) from exc
+
+
+@app.post("/api/labeling/projects/select-root")
+def select_label_project_root() -> dict[str, Any]:
+    try:
+        root = _choose_folder_macos("选择标注项目根文件夹")
+        return {"path": str(root.resolve(strict=True)) if root else None, "cancelled": root is None}
+    except Exception as exc:
+        raise _safe_error(exc) from exc
+
+
+@app.post("/api/labeling/projects")
+@_serialized_database_operation
+def save_label_project(request: LabelProjectSaveRequest) -> dict[str, Any]:
+    try:
+        root = Path(request.root_path).expanduser().resolve(strict=True)
+        if not root.is_dir():
+            raise NotADirectoryError("项目根路径必须是文件夹")
+        if request.file_format == "wav" and request.file_type == "generic":
+            raise ValueError("WAV 项目请选择电机或滑轨类型")
+        projects = _read_label_projects()
+        if any(item.get("name", "").casefold() == request.name.casefold() and item.get("project_id") != request.project_id for item in projects):
+            raise ValueError("同名标注项目已存在")
+        current = next((item for item in projects if item.get("project_id") == request.project_id), None) if request.project_id else None
+        if request.project_id and current is None:
+            raise FileNotFoundError("标注项目不存在")
+        if not request.taxonomy_path:
+            _load_label_taxonomy(root)
+        project = {
+            "project_id": current["project_id"] if current else str(uuid4()),
+            "name": request.name,
+            "root_path": str(root),
+            "file_format": request.file_format,
+            "file_type": request.file_type,
+            "taxonomy_path": request.taxonomy_path,
+            "history_path": request.history_path,
+        }
+        if current is None:
+            projects.append(project)
+        else:
+            projects[projects.index(current)] = project
+        path = _label_projects_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _write_standalone_labels(path, {"projects": projects})
+        return project
+    except Exception as exc:
+        raise _safe_error(exc) from exc
+
+
+@app.delete("/api/labeling/projects/{project_id}")
+@_serialized_database_operation
+def delete_label_project(project_id: str) -> dict[str, Any]:
+    try:
+        projects = _read_label_projects()
+        remaining = [item for item in projects if item.get("project_id") != project_id]
+        if len(remaining) == len(projects):
+            raise FileNotFoundError("标注项目不存在")
+        _write_standalone_labels(_label_projects_path(), {"projects": remaining})
+        return {"deleted": True, "project_id": project_id}
+    except Exception as exc:
+        raise _safe_error(exc) from exc
+
+
+@app.post("/api/labeling/projects/{project_id}/scan")
+def scan_label_project(project_id: str) -> dict[str, Any]:
+    try:
+        project = next((item for item in _read_label_projects() if item.get("project_id") == project_id), None)
+        if project is None:
+            raise FileNotFoundError("标注项目不存在")
+        root = Path(project["root_path"]).resolve(strict=True)
+        if not root.is_dir():
+            raise NotADirectoryError("项目根路径当前不可用")
+        suffixes = (".wav",) if project["file_format"] == "wav" else (".tdms", ".tdms.zst")
+        paths = sorted(str(path.resolve()) for path in root.rglob("*") if path.is_file() and path.name.lower().endswith(suffixes))
+        return {"root_path": str(root), "paths": paths, "count": len(paths)}
+    except Exception as exc:
+        raise _safe_error(exc) from exc
+
+
 @app.post("/api/labeling/session", status_code=201)
 @_serialized_database_operation
 def create_labeling_session(request: LabelSessionCreateRequest) -> dict[str, Any]:
@@ -1796,10 +1889,10 @@ def create_labeling_session(request: LabelSessionCreateRequest) -> dict[str, Any
             output = history
         else:
             stamp = datetime.now().astimezone().strftime("%Y%m%d_%H%M%S")
-            output = root / f"label_{stamp}.json"
+            output = root / f"label_{root.name}_{stamp}.json"
             suffix = 1
             while output.exists():
-                output = root / f"label_{stamp}_{suffix:02d}.json"
+                output = root / f"label_{root.name}_{stamp}_{suffix:02d}.json"
                 suffix += 1
         if output.exists():
             existing_output = _read_standalone_labels(output)
@@ -1847,6 +1940,8 @@ def create_labeling_session(request: LabelSessionCreateRequest) -> dict[str, Any
 @app.get("/api/labeling/taxonomy")
 def get_label_taxonomy(path: str | None = None) -> dict[str, Any]:
     try:
+        if not path:
+            return {"path": "", **_default_label_taxonomy()}
         source = Path(path).expanduser().resolve(strict=True) if path else PROJECT_ROOT
         taxonomy_path, taxonomy = _load_label_taxonomy(source)
         return {"path": str(taxonomy_path), **taxonomy}
@@ -1907,6 +2002,8 @@ def labeling_queue_labels(path: str, history_path: str | None = None) -> dict[st
 @app.put("/api/labeling/taxonomy")
 def update_label_taxonomy(request: LabelTaxonomyUpdateRequest) -> dict[str, Any]:
     try:
+        if not request.path:
+            raise ValueError("请先选择项目根目录，再保存标签类别")
         source = Path(request.path).expanduser().resolve(strict=True) if request.path else PROJECT_ROOT
         taxonomy_path = _label_taxonomy_path(source)
         taxonomy = _validate_label_taxonomy({"results": request.results, "reasons": request.reasons})
@@ -2149,6 +2246,11 @@ def labeling_analysis(request: SignalAnalysisRequest) -> dict[str, Any]:
         raise _safe_error(exc) from exc
 
 
+@app.get("/api/labeling/labels/edit-capability")
+def label_edit_capability() -> dict[str, bool]:
+    return {"annotator_upsert": True}
+
+
 @app.post("/api/labeling/labels", status_code=201)
 @_serialized_database_operation
 def create_label_event(request: LabelEventCreateRequest) -> dict[str, Any]:
@@ -2176,7 +2278,7 @@ def create_label_event(request: LabelEventCreateRequest) -> dict[str, Any]:
         maps = _taxonomy_maps(taxonomy)
         result = maps["results"].get(request.result_key)
         if result is None:
-            raise ValueError("标注结果不在 label.json 中")
+            raise ValueError("标注结果不在标签类别中")
         reason = maps["reasons"].get(request.reason_key)
         if reason is None or reason["parent"] != request.result_key:
             raise ValueError("标注原因与总体结果不一致")
@@ -2226,9 +2328,26 @@ def create_label_event(request: LabelEventCreateRequest) -> dict[str, Any]:
             samples.append(target)
         else:
             target["sample_scope"] = {"start_s": start_s, "end_s": end_s}
-        target.setdefault("label_events", []).append(event)
+        events = target.setdefault("label_events", [])
+        replaced_event_uuid = None
+        if request.target_event_uuid:
+            selected = next((item for item in events if item.get("event_uuid") == request.target_event_uuid), None)
+            if selected is None:
+                raise FileNotFoundError("要编辑或确认的标注事件不存在")
+            same_source = selected if selected.get("source") == request.source else next(
+                (item for item in reversed(events) if item.get("source") == request.source), None
+            )
+            if same_source is not None:
+                replaced_event_uuid = same_source.get("event_uuid")
+                event["event_uuid"] = replaced_event_uuid
+                events.remove(same_source)
+                events.append(event)
+            else:
+                events.append(event)
+        else:
+            events.append(event)
         _write_standalone_labels(sidecar, container)
-        return {**event, "file_uid": document["file_uid"], "sample_id": request.sample_id, "sample_scope": target["sample_scope"], "prototype": bool(document.get("prototype")), "sidecar_path": str(sidecar)}
+        return {**event, "file_uid": document["file_uid"], "sample_id": request.sample_id, "sample_scope": target["sample_scope"], "prototype": bool(document.get("prototype")), "sidecar_path": str(sidecar), "replaced_event_uuid": replaced_event_uuid}
     except Exception as exc:
         raise _safe_error(exc) from exc
 
