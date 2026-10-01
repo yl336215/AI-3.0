@@ -30,7 +30,7 @@ jobs:
           python -m pip install -r requirements.txt pyinstaller
       - name: Bundle local Plotly JavaScript
         run: |
-          python -c "import plotly, pathlib, shutil; shutil.copyfile(pathlib.Path(plotly.__file__).parent / 'package_data' / 'plotly.min.js', pathlib.Path('web/ui/lib/plotly.min.js'))"
+          python -c "import plotly, pathlib, shutil; dst = pathlib.Path('web/ui/lib/plotly.min.js'); dst.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(pathlib.Path(plotly.__file__).parent / 'package_data' / 'plotly.min.js', dst)"
       - name: Build EXE
         run: python -m PyInstaller --noconfirm --clean packaging/ai3_audio_windows.spec
       - name: Smoke test packaged app
