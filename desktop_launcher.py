@@ -47,7 +47,7 @@ def main() -> None:
     url = f"http://127.0.0.1:{port}/"
     if os.environ.get("AI3_NO_BROWSER") != "1":
         threading.Thread(target=_open_when_ready, args=(url,), daemon=True).start()
-    print(f"AI-3.0 音频标注：{url}\n关闭此窗口即可退出。", flush=True)
+    print(f"AI-3.0 Audio Labeling: {url}\nClose this window to stop the server.", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=port, loop="asyncio", http="h11", ws="none", access_log=False)
 
 
