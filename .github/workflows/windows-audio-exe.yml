@@ -10,6 +10,8 @@ on:
       - "config/wav_rules.yaml"
       - "config/sample_profiles/**"
       - "desktop_launcher.py"
+      - "start_ai3_windows.cmd"
+      - "start_ai3_windows.ps1"
       - "packaging/**"
       - "requirements.txt"
       - ".github/workflows/windows-audio-exe.yml"
@@ -33,12 +35,21 @@ jobs:
           python -c "import plotly, pathlib, shutil; dst = pathlib.Path('web/ui/lib/plotly.min.js'); dst.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(pathlib.Path(plotly.__file__).parent / 'package_data' / 'plotly.min.js', dst)"
       - name: Build EXE
         run: python -m PyInstaller --noconfirm --clean packaging/ai3_audio_windows.spec
+      - name: Add Windows start scripts
+        shell: pwsh
+        run: |
+          Copy-Item start_ai3_windows.cmd dist/AI3-Audio-Labeling/
+          Copy-Item start_ai3_windows.ps1 dist/AI3-Audio-Labeling/
       - name: Smoke test packaged app
         shell: pwsh
         run: |
           $env:AI3_PORT = '18030'
           $env:AI3_NO_BROWSER = '1'
-          $exe = Resolve-Path 'dist/AI3-Audio-Labeling/AI3-Audio-Labeling.exe'
+          $portable = Join-Path $env:RUNNER_TEMP 'AI3 portable copy'
+          Copy-Item 'dist/AI3-Audio-Labeling' $portable -Recurse
+          $exe = Join-Path $portable 'AI3-Audio-Labeling.exe'
+          if (-not (Test-Path (Join-Path $portable '_internal'))) { throw 'Packaged runtime is missing' }
+          if (-not (Test-Path (Join-Path $portable 'start_ai3_windows.cmd'))) { throw 'Windows start script is missing' }
           $process = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput 'ai3-stdout.log' -RedirectStandardError 'ai3-stderr.log'
           try {
             $ready = $false
@@ -57,8 +68,11 @@ jobs:
             Get-Content 'ai3-stdout.log' -ErrorAction SilentlyContinue
             Get-Content 'ai3-stderr.log' -ErrorAction SilentlyContinue
           }
+      - name: Create portable ZIP
+        shell: pwsh
+        run: Compress-Archive -Path 'dist/AI3-Audio-Labeling' -DestinationPath 'dist/AI3-Audio-Labeling-win-x64.zip' -Force
       - uses: actions/upload-artifact@v4
         with:
           name: AI3-Audio-Labeling-win-x64
-          path: dist/AI3-Audio-Labeling/
+          path: dist/AI3-Audio-Labeling-win-x64.zip
           if-no-files-found: error
