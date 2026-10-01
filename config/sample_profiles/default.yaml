@@ -1,0 +1,3 @@
+profile_id: default
+name: Resolve channels from config/tdms_rules.yaml
+resolver: line_rules

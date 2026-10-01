@@ -1,0 +1,64 @@
+name: Windows audio labeling EXE
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "core/**"
+      - "web/**"
+      - "config/tdms_rules.yaml"
+      - "config/wav_rules.yaml"
+      - "config/sample_profiles/**"
+      - "desktop_launcher.py"
+      - "packaging/**"
+      - "requirements.txt"
+      - ".github/workflows/windows-audio-exe.yml"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: x64
+          cache: pip
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Bundle local Plotly JavaScript
+        run: |
+          python -c "import plotly, pathlib, shutil; shutil.copyfile(pathlib.Path(plotly.__file__).parent / 'package_data' / 'plotly.min.js', pathlib.Path('web/ui/lib/plotly.min.js'))"
+      - name: Build EXE
+        run: python -m PyInstaller --noconfirm --clean packaging/ai3_audio_windows.spec
+      - name: Smoke test packaged app
+        shell: pwsh
+        run: |
+          $env:AI3_PORT = '18030'
+          $env:AI3_NO_BROWSER = '1'
+          $exe = Resolve-Path 'dist/AI3-Audio-Labeling/AI3-Audio-Labeling.exe'
+          $process = Start-Process -FilePath $exe -PassThru -RedirectStandardOutput 'ai3-stdout.log' -RedirectStandardError 'ai3-stderr.log'
+          try {
+            $ready = $false
+            for ($i = 0; $i -lt 120; $i++) {
+              if ($process.HasExited) { throw "EXE exited with code $($process.ExitCode)" }
+              try {
+                $page = Invoke-WebRequest 'http://127.0.0.1:18030/' -TimeoutSec 2
+                $cards = Invoke-RestMethod 'http://127.0.0.1:18030/api/labeling/analysis-cards' -TimeoutSec 2
+                if ($page.StatusCode -eq 200 -and $cards.cards.Count -gt 0) { $ready = $true; break }
+              } catch { Start-Sleep -Seconds 1 }
+            }
+            if (-not $ready) { throw 'Packaged app did not serve the annotation UI and API' }
+            python packaging/smoke_windows.py
+          } finally {
+            Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+            Get-Content 'ai3-stdout.log' -ErrorAction SilentlyContinue
+            Get-Content 'ai3-stderr.log' -ErrorAction SilentlyContinue
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AI3-Audio-Labeling-win-x64
+          path: dist/AI3-Audio-Labeling/
+          if-no-files-found: error

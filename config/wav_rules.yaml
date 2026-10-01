@@ -1,0 +1,38 @@
+motor:
+  display_name: 电机
+  amplitude_scale: 10.0
+  channels:
+    - index: 0
+      sample_id: channel_1
+      display_name: 电机上方 Z 向加速度
+    - index: 1
+      sample_id: channel_2
+      display_name: 电机上方 Y 向加速度
+    - index: 2
+      sample_id: channel_3
+      display_name: 电流
+    - index: 3
+      sample_id: channel_4
+      display_name: 霍尔
+  direction_suffixes:
+    rfw: 正转
+    rbw: 反转
+rail:
+  display_name: 滑轨
+  amplitude_scale: 10.0
+  channels:
+    - index: 0
+      sample_id: channel_1
+      display_name: 左轨 Y 向加速度
+    - index: 1
+      sample_id: channel_2
+      display_name: 右轨 Y 向加速度
+    - index: 2
+      sample_id: channel_3
+      display_name: 左侧侧板 Y 向加速度
+    - index: 3
+      sample_id: channel_4
+      display_name: 右侧侧板 Y 向加速度
+  direction_suffixes:
+    rfw: 正转
+    rbf: 反转

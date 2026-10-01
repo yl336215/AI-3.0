@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>AI-3.0 · 数据库</title>
+  <link rel="stylesheet" href="/static/app.css?v=20260930-105">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="主导航">
+      <div class="brand"><span class="brand-mark">A3</span><div><strong>AI-3.0</strong><span>数据管理</span></div></div>
+      <nav class="nav-list">
+        <button class="nav-item is-active" type="button" data-view="databases"><span class="nav-number">01</span><span>数据库</span></button>
+        <button class="nav-item" type="button" data-view="labeling"><span class="nav-number">02</span><span>音频标注</span></button>
+        <div class="label-workflow-tabs" aria-label="音频标注步骤"><button class="label-workflow-tab is-active" data-label-tab="settings" type="button"><span>1</span>设置</button><button class="label-workflow-tab" data-label-tab="files" type="button"><span>2</span>文件列表</button><button class="label-workflow-tab" data-label-tab="annotation" type="button"><span>3</span>标注界面</button></div>
+      </nav>
+      <div class="sidebar-foot" data-database-only><span id="sidebarMountDot" class="status-dot is-unknown"></span><span id="sidebarMountText">正在读取数据库状态…</span></div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div><p class="eyebrow" id="pageEyebrow">AI-3.0</p><h1 id="pageTitle">数据库</h1></div>
+        <div class="topbar-actions" data-database-only>
+          <div class="active-db"><span>当前数据库</span><strong id="activeDatabaseName">未打开</strong></div>
+          <button id="refreshAllButton" class="button button-secondary" type="button">刷新状态</button>
+        </div>
+      </header>
+
+      <div id="globalNotice" class="notice" role="status" aria-live="polite" hidden></div>
+
+      <nav id="databaseWorkspaceTabs" class="workspace-tabs" aria-label="数据库工作区" hidden>
+        <button id="databaseWorkspaceTab" class="workspace-tab" data-workspace-view="database" type="button">基础信息</button>
+        <button id="dataPanelWorkspaceTab" class="workspace-tab" data-workspace-view="data-panel" type="button" hidden>
+          <span>数据面板</span><span id="closeDataPanelTab" class="workspace-tab-close" role="button" aria-label="关闭数据面板">×</span>
+        </button>
+      </nav>
+
+      <section id="view-databases" class="view is-active">
+        <button id="createDatabaseCardButton" class="new-database-card" type="button">
+          <span class="new-database-icon">＋</span><span><strong>新建数据库</strong><small>选择父文件夹，输入数据库名称</small></span><span class="card-arrow">开始创建</span>
+        </button>
+        <button id="openDatabaseFolderCardButton" class="new-database-card open-database-card" type="button">
+          <span class="new-database-icon">⌁</span><span><strong>打开数据库</strong><small>直接选择数据库名称文件夹</small></span><span class="card-arrow">选择文件夹</span>
+        </button>
+        <article class="panel database-home-panel">
+          <div class="panel-heading"><div><p class="kicker">数据库列表</p><h2>已有数据库</h2></div><button id="reloadDatabasesButton" class="button button-ghost" type="button">刷新列表</button></div>
+          <div id="databaseList" class="database-list empty-state">正在读取数据库列表…</div>
+        </article>
+      </section>
+
+      <section id="view-database" class="view database-detail-view">
+        <div class="detail-toolbar"><button id="backToDatabasesButton" class="button button-ghost" type="button">← 返回数据库列表</button><button id="exportDatabaseButton" class="button button-secondary" type="button">导出数据</button></div>
+        <article class="database-detail-hero">
+          <div><p class="kicker">数据库</p><h2 id="detailDatabaseName">未打开数据库</h2><p id="detailDatabasePath">请先从主页打开或新建数据库。</p></div>
+        </article>
+
+        <div class="database-action-grid" aria-label="数据库操作">
+        <button id="openDataMaintenanceButton" class="database-action-button is-primary" type="button"><strong>数据维护</strong><span>导入数据或更新数据</span></button>
+          <button id="openLabelImportButton" class="database-action-button" type="button"><strong>导入标签数据</strong><span>打开标签导入窗口</span></button>
+          <button id="openDataPanelButton" class="database-action-button" type="button"><strong>数据面板</strong><span>在本页面打开工作区 Tab</span></button>
+        </div>
+
+        <article class="panel database-meta-panel">
+          <div class="panel-heading"><div><p class="kicker">基础信息</p><h3>数据库信息</h3></div></div>
+          <form id="databaseMetaForm" class="database-basic-grid">
+            <label><span>数据库名称</span><input id="detailDatabaseNameInput" type="text" maxlength="120" required></label>
+            <label class="database-root-field"><span>数据库路径</span><input id="detailDatabaseRootInput" type="text" readonly><small>存放原始文件的位置；SQLite 保存在该文件夹的 databases 子目录内。</small></label>
+            <div class="database-path-actions"><button id="selectStorageFolderButton" class="button button-secondary" type="button">修改数据库路径</button></div>
+            <div class="sqlite-path-row"><span>SQLite</span><code id="detailSqlitePath">—</code></div>
+            <div class="meta-form-action"><button id="saveDatabaseMetaButton" class="button button-primary" type="submit">保存名称</button></div>
+          </form>
+          <div class="visually-hidden" aria-hidden="true">
+            <div id="storageHero"><span id="storagePath"></span><span id="storageMessage"></span><span id="storageBadge"></span></div>
+            <span id="storageId"></span><span id="storageFree"></span><span id="storageFreeDetail"></span>
+          </div>
+        </article>
+      </section>
+
+      <section id="view-data-panel" class="view data-panel-view">
+        <div class="data-panel-heading"><div><p class="kicker">页面内工作区</p><h2 id="dataPanelDatabaseName">数据面板</h2></div><code id="dataPanelDatabasePath" class="mono-note"></code></div>
+        <div class="metric-grid">
+          <article class="metric-card"><span>文件</span><strong id="panelMetricFiles">—</strong><small>已登记</small></article>
+          <article class="metric-card"><span>样本</span><strong id="panelMetricSamples">—</strong><small>已发现</small></article>
+          <article class="metric-card"><span>导入任务</span><strong id="panelMetricRuns">—</strong><small>累计批次</small></article>
+          <article class="metric-card"><span>异常状态</span><strong id="panelMetricIssues">—</strong><small>缺失、变化或不可读</small></article>
+        </div>
+        <div id="dataPanelSourceHost">
+          <section id="sourceDataWorkspace">
+            <details id="dataFilterPanel" class="panel data-filter-collapsible">
+              <summary><span><strong>筛选</strong><small>文件名、工况和标签</small></span><span class="filter-collapse-state">展开</span></summary>
+            <form id="fileFilterForm">
+              <div class="file-filter-strip">
+                <label><span>文件名</span><input name="filename" type="search" placeholder="输入完整或部分文件名"></label>
+                <label><span>可用状态</span><select name="availability_status"><option value="">全部</option><option value="present">存在</option><option value="missing">缺失</option></select></label>
+                <label><span>完整性</span><select name="integrity_status"><option value="">全部</option><option value="verified">已验证</option><option value="changed">已变化</option><option value="unreadable">不可读</option></select></label>
+                <div class="filter-strip-actions"><button id="clearFileFiltersButton" class="button button-ghost" type="button">清空全部</button><button class="button button-primary" type="submit">应用筛选</button></div>
+              </div>
+              <div class="filter-card-grid">
+                <article class="panel filter-panel condition-filter-card">
+                  <div class="panel-heading"><div><h3>工况筛选</h3></div><span class="badge badge-info">字段间 AND</span></div>
+                  <p class="filter-rule">下拉可多选；同一字段内为 OR，不同字段之间为 AND。负载和转速比按所选单值精确匹配。</p>
+                  <div id="conditionFilterFields" class="condition-card-host" data-condition-card="filter"></div>
+                </article>
+                <article class="panel filter-panel label-filter-card" aria-disabled="true">
+                  <div class="panel-heading"><div><h3>标签筛选</h3></div><span class="badge badge-neutral">待启用</span></div>
+                  <p class="filter-rule">下拉多选将在标签导入和标签事件建立后启用，并按同一个样本组合匹配。</p>
+                  <div id="labelFilterFields" class="label-filter-grid"></div>
+                </article>
+              </div>
+            </form>
+            </details>
+            <div class="data-toolbar"><div><strong id="fileCountText">0 个文件</strong><span id="sampleCountText">0 个样本</span></div><div class="toolbar-actions"><button id="editSelectedConditionsButton" class="button button-secondary" type="button" disabled>更新所选文件工况</button><button id="reloadFilesButton" class="button button-ghost" type="button">刷新</button></div></div>
+            <article class="panel table-panel"><div class="table-wrap"><table class="file-table"><thead><tr><th class="cell-check"><input id="selectAllFiles" type="checkbox" aria-label="全选当前文件"></th><th>文件</th><th>工况</th><th>状态</th><th>样本</th><th class="cell-action">详情</th></tr></thead><tbody id="fileRows"><tr><td colspan="6" class="empty-cell">正在读取文件…</td></tr></tbody></table></div></article>
+          </section>
+        </div>
+      </section>
+
+      <section id="view-labeling" class="view labeling-page-view">
+        <section id="labelTabSettings" class="label-tab-page">
+        <div class="label-settings-primary-grid">
+        <article class="panel label-session-source">
+          <div class="panel-heading"><h3>A、设置标注员工</h3><strong id="labelSourcePreview" class="badge badge-info" hidden>operator</strong></div>
+          <div class="label-source-row">
+            <label><span>标注人员类型</span><select id="labelSourceType"><option value="operator">员工</option><option value="expert">专家</option></select></label>
+            <label><span>员工标识</span><input id="labelSourceIdentity" type="text" maxlength="80" placeholder="姓名或工号"></label>
+          </div>
+        </article>
+        <article class="panel label-json-config-card">
+          <div class="panel-heading"><h3>B、设置标签类别和导入标签</h3></div>
+          <div class="label-json-select-row label-optional-json-row"><input id="labelSelectedSessionPath" type="text" aria-label="标注 JSON 路径" placeholder="不选择则自动生成标注 JSON" readonly><button id="selectLabelSessionButton" class="button button-secondary" type="button">选择标注 JSON</button><button id="clearLabelSessionButton" class="button button-ghost" type="button">取消选择</button></div>
+          <small id="labelSessionSelectionStatus">选择后直接写入所选文件</small>
+          <div class="label-json-select-row"><input id="labelSelectedJsonPath" type="text" placeholder="请选择标签类别 JSON" readonly><button id="selectLabelJsonButton" class="button button-secondary" type="button">选择标签类别 JSON</button></div><small id="labelJsonSelectionStatus" hidden></small>
+          <details class="label-taxonomy-card">
+            <summary class="label-taxonomy-summary"><span><strong>高级：编辑标签类别</strong></span><span class="label-taxonomy-chevron" aria-hidden="true">⌄</span></summary>
+            <div class="label-taxonomy-content"><code id="labelTaxonomyPath" class="mono-note">请先选择标签类别 JSON</code>
+              <div class="label-taxonomy-actions"><button id="addLabelResultButton" class="button button-secondary" type="button">＋ 增加 result</button><button id="addLabelReasonButton" class="button button-secondary" type="button">＋ 增加 reason</button><button id="saveLabelTaxonomyButton" class="button button-primary" type="button" disabled>保存标签类别</button></div>
+              <div id="labelTaxonomyEditor" class="label-taxonomy-editor"><div class="empty-state">首次请手动选择标签类别 JSON</div></div>
+            </div>
+          </details>
+        </article>
+        <article class="panel label-data-source-card">
+          <div class="panel-heading"><h3>C、选择标注件类型和路径</h3></div>
+          <div class="label-type-parse-row">
+            <label><span>标注件类型</span><select id="labelFileType"><option value="tdms">TDMS / TDMS.ZST</option><option value="wav">WAV</option></select></label>
+            <label id="labelLineField"><span>解析方式：产线</span><select id="labelLineSelect" disabled><option value="">请选择产线</option></select></label>
+            <label id="labelWavProfileField" hidden><span>解析方式：WAV 类型</span><select id="labelWavProfileSelect"><option value="">请选择类型</option><option value="motor">电机</option><option value="rail">滑轨</option></select></label>
+          </div>
+          <div class="label-path-actions"><button id="selectLabelTdmsButton" class="button button-secondary" type="button">选择文件</button><button id="selectLabelFolderButton" class="button button-secondary" type="button">选择文件夹</button></div>
+          <div class="label-file-path-row"><input id="labelSelectedSourcePath" type="text" aria-label="标注件路径" placeholder="标注件路径" readonly><input id="labelTdmsPath" type="hidden"><button id="loadLabelTdmsButton" type="button" hidden></button></div>
+          <div class="label-source-ready"><span id="labelSettingsSelectionStatus">尚未选择文件</span><button id="startLabelingFromSettingsButton" class="button button-primary" type="button" disabled>下一步 →</button></div>
+        </article>
+        </div>
+        </section>
+        <section id="labelTabFiles" class="label-tab-page" hidden>
+        <article class="label-queue-toolbar">
+          <button id="toggleLabelFileListButton" class="button button-ghost" type="button">← 列表</button><button id="previousLabelFileButton" class="button button-ghost" type="button" disabled>← 上一条</button>
+          <div class="label-queue-progress"><strong id="labelQueuePosition">文件 0/0</strong><span id="labelQueueProgressText">标注进度 0/0（0%）</span><div><i id="labelQueueProgressBar"></i></div></div>
+          <button id="nextLabelFileButton" class="button button-ghost" type="button" disabled>下一条 →</button><label class="label-goto">前往第 <input id="labelGotoIndex" type="number" min="1" value="1"> 个文件</label><button id="gotoLabelFileButton" class="button button-ghost" type="button">前往</button><button id="startLabelingFromListButton" class="button button-primary" type="button" disabled>开始标注</button>
+        </article>
+        <article id="labelFileListPanel" class="panel"><div class="panel-heading"><div><p class="kicker">任务文件</p><h3>待标注文件列表</h3></div><span id="labelFileListCount" class="badge badge-neutral">0 个文件</span></div><div class="label-session-json">当前文件标注 JSON：<code id="labelSessionJsonPath">载入文件后显示</code></div><div class="label-queue-filter"><label><span>result</span><select id="labelQueueResultFilter"><option value="">全部结果</option><option value="__unlabeled__">未标注</option></select></label><label><span>reason</span><select id="labelQueueReasonFilter"><option value="">全部原因</option></select></label><button id="applyLabelQueueFilterButton" class="button button-primary" type="button">应用筛选</button><button id="clearLabelQueueFilterButton" class="button button-secondary" type="button">清除筛选</button><span id="labelQueueFilterStatus">显示全部文件</span></div><div id="labelFileQueueList" class="label-file-queue-list"><div class="empty-state">请先在“设置”中创建任务</div></div></article>
+        </section>
+        <section id="labelTabAnnotation" class="label-tab-page" hidden>
+        <div id="labelAnnotationEmpty" class="panel empty-state">请先在“设置”中选择 TDMS、TDMS.ZST 或 WAV 文件。</div>
+        <section id="singleLabelWorkspace" hidden>
+          <article class="panel label-navigation-card">
+            <div class="panel-heading"><div><p class="kicker">导航区</p><h3 id="labelCurrentFile">—</h3></div><div class="label-current-actions"><button id="annotationPreviousButton" class="button button-ghost" type="button">← 上一条</button><div class="label-navigation-position"><form id="annotationJumpForm" class="label-navigation-jump"><input id="annotationJumpIndex" type="number" min="1" step="1" aria-label="跳转到第几条" required><span>/ <strong id="annotationQueueTotal">0</strong></span><button id="annotationJumpButton" class="button button-secondary" type="submit">跳转</button></form><span id="labelFileCondition" class="badge badge-neutral"></span></div><button id="annotationNextButton" class="button button-ghost" type="button">下一条 →</button></div></div>
+            <div class="label-navigation-tools"><label class="audio-speed-control" title="只改变试听速度，不改变标注时间"><span>播放速度</span><input id="labelPlaybackSpeed" data-playback-speed type="range" min="0.1" max="2" step="0.1" value="1"><output data-playback-speed-value>1.0×</output></label><label class="audio-volume-control"><span>播放音量</span><input id="labelPlaybackVolume" type="range" min="0" max="500" step="1" value="100"><output id="labelPlaybackVolumeValue">100%</output></label><button id="labelLowFrequencyFilter" class="button button-secondary label-filter-toggle" type="button" aria-pressed="false" title="开启时以 20 Hz 高通去除低频，Mel 和播放使用滤波数据">低频滤波（20 Hz 高通）：否</button><div class="label-navigation-analysis"><label for="labelAnalysisChannel">分析通道</label><select id="labelAnalysisChannel" aria-label="高级分析通道"></select><button id="openNavigationAnalysisButton" class="button button-secondary" type="button">高级分析</button></div></div>
+          </article>
+          <section class="label-annotation-area"><div class="label-area-title"><p class="kicker">标注区</p><div class="label-area-controls"><div class="label-layout-switch" role="group" aria-label="通道排列"><div class="label-grid-layout"><input id="labelGridRows" type="number" min="1" max="8" step="1" value="2" aria-label="行数"><span>×</span><input id="labelGridColumns" type="number" min="1" max="8" step="1" value="2" aria-label="列数"><button class="button button-primary" data-channel-layout="grid" type="button">应用</button></div><button class="button button-ghost" data-channel-layout="column" type="button">N×1</button><button class="button button-ghost" data-channel-layout="row" type="button">1×N</button></div><nav id="labelChannelJump" class="label-channel-jump" aria-label="跳转通道" hidden><span class="label-channel-jump-label">跳转通道</span><div id="labelChannelJumpOptions" class="label-channel-jump-options"></div></nav></div></div><div id="labelChannelsRow" class="label-channels-row" data-channel-layout="grid" style="--layout-rows:2;--layout-columns:2"></div></section>
+        </section>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <div id="labelAnalysisMask" class="analysis-drawer-mask" hidden>
+    <div id="analysisDrawerResizer" class="analysis-drawer-resizer" role="separator" aria-label="调整分析窗口宽度" aria-orientation="vertical"></div>
+    <aside id="analysisDrawer" class="analysis-drawer">
+      <div class="analysis-drawer-head"><div><h3>高级分析</h3><p id="analysisCurrentSample" class="hint">当前无可分析通道</p></div><button id="closeLabelAnalysisButton" class="button button-ghost" type="button">收起</button></div>
+      <div class="analysis-drawer-body">
+        <div id="analysisTargets" class="analysis-targets"></div>
+        <div id="analysisTabs" class="analysis-tabs"></div>
+        <section id="analysisParameterPanel" class="analysis-parameter-panel" hidden><strong>⚙ 参数调整</strong><div id="analysisParameterFields" class="analysis-parameter-fields"></div><button id="applyAnalysisParametersButton" class="button button-primary" type="button">开始分析</button></section>
+        <div id="analysisResults" class="analysis-results"><div class="analysis-empty">选择一种分析方法，再点击开始分析。</div></div>
+      </div>
+    </aside>
+  </div>
+
+  <dialog id="createDatabaseDialog" class="modal modal-compact">
+    <form id="createDatabaseForm">
+      <div class="modal-heading"><div><p class="kicker">新建数据库</p><h2>选择位置和名称</h2></div><button class="icon-button" data-close-dialog="createDatabaseDialog" type="button" aria-label="关闭">×</button></div>
+      <label class="create-database-field"><span>父文件夹</span><div class="create-database-folder-row"><input id="createDatabaseParentPath" type="text" placeholder="先选择父文件夹" readonly required><button id="chooseDatabaseParentButton" class="button button-secondary" type="button">选择文件夹</button></div></label>
+      <label class="create-database-field"><span>数据库名称</span><input id="createDatabaseName" type="text" maxlength="120" placeholder="输入数据库名称" required></label>
+      <div class="modal-footer"><button class="button button-secondary" data-close-dialog="createDatabaseDialog" type="button">取消</button><button id="confirmCreateDatabaseButton" class="button button-primary" type="submit">创建数据库</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="dataMaintenanceDialog" class="modal modal-compact">
+    <div class="blank-dialog">
+      <div class="modal-heading"><div><p class="kicker">当前数据库</p><h2>数据维护</h2></div><button class="icon-button" data-close-dialog="dataMaintenanceDialog" type="button" aria-label="关闭">×</button></div>
+      <div class="update-business-options data-maintenance-options">
+        <button class="database-action-button is-primary" data-maintenance-action="import" type="button"><strong>导入数据</strong><span>选择文件或文件夹，填写工况并预览导入</span></button>
+        <button class="database-action-button" data-maintenance-action="update" type="button"><strong>更新数据</strong><span>编辑工况或选择路径变更，确认后仅应用已修改的内容</span></button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="rawImportDialog" class="modal modal-wide">
+    <div class="modal-scroll">
+      <div class="modal-heading modal-sticky-heading"><div><p class="kicker">当前数据库</p><h2>导入原始数据</h2><strong id="importDatabaseName" class="modal-database-name">未打开</strong></div><button class="icon-button" data-close-dialog="rawImportDialog" type="button" aria-label="关闭">×</button></div>
+      <nav id="importStepIndicator" class="import-step-indicator" aria-label="导入步骤">
+        <span data-import-step="1" class="is-active"><b>1</b>选择产线</span><i>→</i>
+        <span data-import-step="2"><b>2</b>选择来源</span><i>→</i>
+        <span data-import-step="3"><b>3</b>导入方式</span><i>→</i>
+        <span data-import-step="4"><b>4</b>编辑工况</span><i>→</i>
+        <span data-import-step="5"><b>5</b>预览确认</span>
+      </nav>
+      <form id="importForm">
+        <article id="importLineStep" class="panel">
+          <div class="panel-heading"><div><p class="kicker">步骤 1</p><h3>选择产线</h3></div></div>
+          <div class="import-line-picker">
+            <label><span>产线（line）</span><select id="importLineSelect"><option value="">请选择产线</option></select></label>
+            <button id="autoDetectLinesButton" class="button button-secondary" type="button">自动识别产线</button>
+            <button id="showCreateLineButton" class="button button-secondary" type="button">＋ 新建产线</button>
+          </div>
+          <div id="createLineFields" class="import-line-create" hidden>
+            <label><span>新产线名称</span><input id="newLineName" type="text" maxlength="120" placeholder="例如 epump4"></label>
+            <button id="createLineButton" class="button button-primary" type="button">创建并选择</button>
+          </div>
+          <small>产线保存在 catalog_state.json，并对应数据库根目录下的同名文件夹。</small>
+          <div class="wizard-actions"><span></span><button id="importStep1Next" class="button button-primary" type="button">下一步</button></div>
+        </article>
+        <article id="importSourceStep" class="panel" hidden>
+          <div class="panel-heading"><div><p class="kicker">步骤 2</p><h3>选择文件或文件夹</h3></div><span class="badge badge-neutral">TDMS / TDMS.ZST / WAV</span></div>
+          <label><span>导入文件类型</span><select id="importSourceFileType" required><option value="">请选择文件类型</option><option value="tdms">TDMS / TDMS.ZST</option><option value="wav">WAV</option></select><small>选择 TDMS 时，同时处理 .tdms 和 .tdms.zst 文件。</small></label>
+          <div class="source-picker-actions"><button id="selectImportFilesButton" class="button button-secondary" type="button">选择文件</button><button id="selectImportFolderButton" class="button button-secondary" type="button">选择文件夹</button></div>
+          <div class="form-grid">
+            <label class="span-two"><span>已选来源</span><textarea id="importSourcePaths" rows="5" placeholder="选择后在此显示；也可手工输入，每行一个路径" required></textarea><small>同一批选择应用同一组工况；需要不同工况时分批导入。</small></label>
+            <label><span>样本发现配置</span><select id="importSampleProfile"><option value="default">默认 Up / Down 通道</option></select></label>
+          </div>
+          <div class="wizard-actions"><button class="button button-secondary" data-import-back type="button">上一步</button><button id="importStep2Next" class="button button-primary" type="button">下一步</button></div>
+        </article>
+        <article id="importLocationStep" class="panel" hidden>
+          <div class="panel-heading"><div><p class="kicker">步骤 3</p><h3>设置导入方式</h3></div></div>
+          <label><span id="importPlacementLabel">是否拷贝到当前数据库文件夹内</span><select id="importPlacementMode"><option value="">请选择</option><option value="register">不拷贝，文件已经在当前数据库文件夹内</option><option value="copy">拷贝到当前数据库文件夹内</option><option value="move">移动到当前数据库文件夹内</option></select><small>移动只会在目标文件成功写入并登记后删除原文件。</small></label>
+          <p id="importLineDestinationHint" class="panel-description"></p>
+          <div class="wizard-actions"><button class="button button-secondary" data-import-back type="button">上一步</button><button id="importStep3Next" class="button button-primary" type="button">下一步</button></div>
+        </article>
+        <article id="importConditionStep" class="panel" hidden>
+          <div class="panel-heading"><div><p class="kicker">步骤 4</p><h3>编辑工况</h3></div><span class="badge badge-info">不填写则保持为空</span></div>
+          <p class="panel-description">固定字段按文件结构写入 conditions；特殊文件属性可在 metadata 中增加。</p>
+          <div id="importConditions" class="condition-card-host" data-condition-card="import"></div>
+          <div class="wizard-actions"><button class="button button-secondary" data-import-back type="button">上一步</button><button id="importStep4Next" class="button button-primary" type="button">下一步</button></div>
+        </article>
+        <article id="importPreviewStep" class="panel" hidden>
+          <div class="panel-heading"><div><p class="kicker">步骤 5</p><h3>预览确认</h3></div></div>
+          <div id="importReviewSummary" class="import-review-summary"></div>
+          <p class="panel-description">生成预览不会复制、移动文件或写入数据库。</p>
+          <div class="wizard-actions"><button class="button button-secondary" data-import-back type="button">上一步</button><button id="startImportButton" class="button button-primary" type="submit">生成导入预览</button></div>
+        </article>
+      </form>
+      <article id="importProgress" class="panel import-progress" hidden><div><strong>正在导入原始数据</strong><span>请保持页面打开。</span></div><progress></progress></article>
+      <article id="importResultPanel" class="panel result-panel" hidden><div class="panel-heading"><div><p class="kicker">结果</p><h3>导入报告</h3></div></div><div id="importResult"></div></article>
+    </div>
+  </dialog>
+
+  <dialog id="labelImportDialog" class="modal modal-compact">
+    <div class="blank-dialog"><div class="modal-heading"><div><p class="kicker">当前数据库</p><h2>导入标签数据</h2><strong id="labelImportDatabaseName" class="modal-database-name">未打开</strong></div><button class="icon-button" data-close-dialog="labelImportDialog" type="button" aria-label="关闭">×</button></div><div class="blank-modal-space"></div></div>
+  </dialog>
+
+  <dialog id="reconcileDialog" class="modal modal-wide">
+    <div class="modal-scroll">
+      <div class="modal-heading modal-sticky-heading"><div><p class="kicker">当前数据库</p><h2>更新数据</h2></div><button class="icon-button" data-close-dialog="reconcileDialog" type="button" aria-label="关闭">×</button></div>
+      <nav class="import-step-indicator" aria-label="更新步骤">
+        <span data-update-step="1" class="is-active"><b>1</b>更新内容</span><i>→</i>
+        <span data-update-step="2"><b>2</b>更新范围</span><i>→</i>
+        <span data-update-step="3"><b>3</b>编辑工况</span><i>→</i>
+        <span data-update-step="4"><b>4</b>路径预览</span><i>→</i>
+        <span data-update-step="5"><b>5</b>确认更新</span>
+      </nav>
+      <article id="updateBusinessStep" class="panel update-business-panel">
+        <div class="panel-heading"><div><p class="kicker">步骤 1</p><h3>选择更新内容</h3></div><span class="badge badge-info">可同时选择</span></div>
+        <div class="update-business-options">
+          <label class="update-business-option" for="conditionUpdateBusinessToggle">
+            <input id="conditionUpdateBusinessToggle" type="checkbox" checked>
+            <span><strong>编辑工况</strong><small>仅提交本次改动的字段。</small></span>
+          </label>
+          <label class="update-business-option" for="pathUpdateBusinessToggle">
+            <input id="pathUpdateBusinessToggle" type="checkbox">
+            <span><strong>检查路径</strong><small>只应用手动选择的变更，默认暂不处理。</small></span>
+          </label>
+        </div>
+        <p id="updateBusinessHint" class="update-business-hint">预填工况仅供查看；未编辑的字段不会写入数据库。</p>
+        <div class="wizard-actions"><span></span><button class="button button-primary" data-update-next="2" type="button">下一步</button></div>
+      </article>
+      <article id="updateScopeStep" class="panel action-panel reconcile-scope-panel" hidden>
+        <div class="panel-heading"><div><p class="kicker">步骤 2</p><h3>选择更新范围</h3></div></div>
+        <div class="reconcile-scope-fields">
+          <label><span>更新范围</span><select id="reconcileScope"><option id="selectedFilesUpdateScope" value="selected_files" hidden disabled>所选文件</option><option value="database">整个数据库</option><option value="folder">指定文件夹</option><option value="file">指定文件</option></select></label>
+          <label id="reconcileFolderField" hidden><span>文件夹</span><select id="reconcileFolderPath"><option value="">请选择文件夹</option></select><small>仅显示当前数据库内的文件夹。</small></label>
+          <label id="reconcileFileField" hidden><span>文件</span><input id="reconcileFilePath" type="search" list="reconcileFileOptions" autocomplete="off" placeholder="输入文件名或路径搜索"><datalist id="reconcileFileOptions"></datalist><small id="reconcileFileSearchHint">输入至少 2 个字符，可按文件名或相对路径搜索。</small></label>
+        </div>
+        <div class="wizard-actions"><button class="button button-secondary" data-update-back type="button">上一步</button><button class="button button-primary" data-update-next="3" type="button">下一步</button></div>
+      </article>
+      <section id="updateConditionStep" hidden>
+      <article id="updateConditionsPanel" class="panel update-operation-card">
+        <div class="panel-heading"><div><p class="kicker">工况更新</p><h3>工况信息</h3></div><span id="conditionUpdatePermissionBadge" class="badge badge-info">可编辑</span></div>
+        <p id="updateConditionsHint" class="panel-description">只更新本次编辑的字段；清空已有字段会清除该值。</p>
+        <div id="reconcileConditions" class="condition-card-host" data-condition-card="update"></div>
+      </article>
+      <div id="updateConditionsSkipped" class="empty-state">本次未选择工况更新，将跳过此步骤。</div>
+      <div class="wizard-actions"><button class="button button-secondary" data-update-back type="button">上一步</button><button class="button button-primary" data-update-next="4" type="button">下一步</button></div>
+      </section>
+      <section id="updatePathStep" hidden>
+      <article id="directoryUpdatePanel" class="panel update-operation-card">
+        <div class="panel-heading"><div><p class="kicker">路径检查和更新</p><h3>检查路径和文件变化</h3></div><button id="reconcilePreviewButton" class="button button-primary" type="button">生成检查预览</button></div>
+        <p class="panel-description">检查新增、移动、缺失、重新压缩和内容变化；生成预览不会修改数据库或文件。</p>
+      </article>
+      <div id="reconcileEmpty" class="empty-state large-empty">尚未生成路径检查预览。</div>
+      <div id="reconcileWorkspace" hidden>
+        <div id="reconcileCounts" class="category-grid"></div>
+        <article class="panel"><div class="panel-heading"><div><p class="kicker">差异明细</p><h3>选择处理方式</h3></div><span id="reconcilePreviewId" class="mono-note"></span></div><div class="table-wrap"><table><thead><tr><th>分类</th><th>原路径</th><th>候选路径 / 说明</th><th>处理方式</th></tr></thead><tbody id="reconcileRows"></tbody></table></div><div class="panel-footer"><span id="reconcileSelectionHint">未选择需要应用的变更</span><button id="reconcileApplyButton" class="button button-primary" type="button" hidden>应用已选变更</button></div></article>
+      </div>
+      <div id="updatePathSkipped" class="empty-state">本次未选择路径检查和更新，将跳过此步骤。</div>
+      <p id="updateNoChangesNotice" class="update-step-alert" role="alert" hidden></p>
+      <div class="wizard-actions"><button class="button button-secondary" data-update-back type="button">上一步</button><button class="button button-primary" data-update-next="5" type="button">下一步</button></div>
+      </section>
+      <article id="updateConfirmStep" class="panel" hidden>
+        <div class="panel-heading"><div><p class="kicker">步骤 5</p><h3>确认更新</h3></div></div>
+        <div id="updateReviewSummary" class="import-review-summary"></div>
+        <p class="panel-description">只有已编辑的工况和手动选择的路径变更会写入数据库。</p>
+        <div class="wizard-actions"><button class="button button-secondary" data-update-back type="button">上一步</button><button id="confirmUpdateButton" class="button button-primary" type="button">确认更新</button></div>
+      </article>
+      <button id="saveScopeConditionsButton" type="button" hidden>更新范围内工况</button>
+    </div>
+  </dialog>
+
+  <template id="conditionCardTemplate">
+    <div class="condition-editor">
+      <div class="form-grid condition-grid" data-condition-fields></div>
+      <div class="extra-fields-heading" data-extra-fields-heading><strong>增加字段</strong><button class="button button-ghost add-extra-field-button" type="button">＋ 增加字段</button></div>
+      <div class="extra-condition-fields" data-extra-fields></div>
+    </div>
+  </template>
+
+  <script src="/static/lib/plotly.min.js" defer></script>
+  <script src="/static/app.js?v=20261001-135" defer></script>
+</body>
+</html>
