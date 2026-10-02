@@ -39,6 +39,7 @@ const API = Object.freeze({
   labelingSelectJson: "/api/labeling/select-json",
   labelingQueueLabels: (path, historyPath) => `/api/labeling/queue-labels?path=${encodeURIComponent(path)}&history_path=${encodeURIComponent(historyPath || "")}`,
   labelingSave: "/api/labeling/labels",
+  labelingPrototype: "/api/labeling/prototype",
   labelingEditCapability: "/api/labeling/labels/edit-capability",
   labelingDelete: "/api/labeling/labels",
   labelingTaxonomy: path => path ? `/api/labeling/taxonomy?path=${encodeURIComponent(path)}` : "/api/labeling/taxonomy",
@@ -1294,7 +1295,7 @@ function groupLabelSources(paths, wavProfile, isWav = Boolean(wavProfile)) {
   if (!isWav) return paths.map(path => ({ path, paths: [path], labeled: false, wavProfile }));
   const groups = new Map();
   paths.forEach(path => {
-    const filename = path.split("/").pop();
+    const filename = path.replaceAll("\\", "/").split("/").pop();
     const match = filename.match(/^(.+)-(rfw|rbw|ifw|rbf)\.wav$/i);
     const parent = path.slice(0, -filename.length);
     const key = match ? `${parent}${match[1]}` : path;
@@ -1510,11 +1511,13 @@ function renderLabelQueueFilterOptions() {
 
 function labelQueueRoot() {
   const projectRoot = state.labelProjects.find(item => item.project_id === state.labelProjectId)?.root_path;
-  return (projectRoot || state.labelingSourceSelection?.rootPath || state.labelingOutputDirectory || "").replace(/\/$/, "");
+  return (projectRoot || state.labelingSourceSelection?.rootPath || state.labelingOutputDirectory || "").replaceAll("\\", "/").replace(/\/$/, "");
 }
 
 function labelQueueFolder(path, root) {
-  const relative = root && path.startsWith(`${root}/`) ? path.slice(root.length + 1) : path.split("/").pop();
+  const normalized = path.replaceAll("\\", "/");
+  const relative = root && normalized.toLocaleLowerCase().startsWith(`${root.toLocaleLowerCase()}/`)
+    ? normalized.slice(root.length + 1) : normalized.split("/").pop();
   return relative.includes("/") ? relative.slice(0, relative.lastIndexOf("/")) : "__root__";
 }
 
@@ -1537,7 +1540,20 @@ async function refreshLabelQueueLabels() {
   const path = state.labelingSessionPath || state.labelingHistoryPath;
   if (!path) { state.labelingQueueLabels = new Map(); return; }
   const payload = await request(API.labelingQueueLabels(path));
-  state.labelingQueueLabels = new Map((payload.files || []).map(file => [file.path, file.events || []]));
+  const queuePaths = state.labelingAllQueue.flatMap(item => item.paths || [item.path]);
+  const normalize = value => String(value || "").replaceAll("\\", "/").toLocaleLowerCase();
+  const byName = new Map();
+  queuePaths.forEach(source => {
+    const name = normalize(source).split("/").pop();
+    byName.set(name, [...(byName.get(name) || []), source]);
+  });
+  const saved = new Map();
+  (payload.files || []).forEach(file => {
+    const exact = queuePaths.find(source => normalize(source) === normalize(file.path));
+    const matches = exact ? [exact] : byName.get(normalize(file.path).split("/").pop()) || [];
+    if (matches.length === 1) saved.set(matches[0], file.events || []);
+  });
+  state.labelingQueueLabels = saved;
 }
 
 async function applyLabelQueueFilter() {
@@ -1743,7 +1759,7 @@ function renderLabelQueue() {
     }).join("");
     const status = item.loading ? "载入中…" : item.loadError ? "载入失败" : item.labeled ? "已标注" : item.partialLabeled ? "部分标注" : item.loaded ? "可开始" : "未载入";
     const files = item.paths || [item.path];
-    return `<button class="label-file-queue-item ${index === current ? "is-active" : ""}" data-label-queue-index="${index}" type="button" title="单击选择，双击开始标注" ${loading ? "disabled" : ""}><span>${index + 1}</span><strong>${escapeHtml(item.displayName || item.path.split("/").pop())}</strong><small>${escapeHtml(files.map(path => path.split("/").pop()).join(" · "))}</small><i>${status}</i><span class="label-queue-samples">${samples}</span></button>`;
+    return `<button class="label-file-queue-item ${index === current ? "is-active" : ""}" data-label-queue-index="${index}" type="button" title="单击选择，双击开始标注" ${loading ? "disabled" : ""}><span>${index + 1}</span><strong>${escapeHtml(item.displayName || item.path.split(/[\\/]/).pop())}</strong><small>${escapeHtml(files.map(path => path.split(/[\\/]/).pop()).join(" · "))}</small><i>${status}</i><span class="label-queue-samples">${samples}</span></button>`;
   }).join("") : `<div class="empty-state">${state.labelingAllQueue.length ? "没有符合筛选条件的文件，请调整子文件夹、result 或 reason" : "请在设置页选择文件或文件夹"}</div>`;
 }
 
@@ -2532,6 +2548,19 @@ function labelLayoutContext(files) {
   return { choices, settings };
 }
 
+function syncLabelHistorySidebar() {
+  const sidebar = $("#labelHistorySidebarContent");
+  if (!sidebar) return;
+  const scrollTop = sidebar.scrollTop;
+  const cards = $$('[data-label-sample]', $("#labelChannelsRow"));
+  sidebar.innerHTML = cards.length ? cards.map((card, index) => {
+    const title = $(".label-channel-title h3", card)?.textContent || card.dataset.labelSample;
+    const count = $(".label-channel-history-title span", card)?.textContent || "0 条";
+    return `<section class="label-history-sidebar-section" data-history-card-index="${index}"><div class="label-history-sidebar-section-title"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(count)}</span></div><div class="label-history-sidebar-items">${$(".label-channel-history", card)?.innerHTML || ""}</div></section>`;
+  }).join("") : '<div class="empty-state">当前文件暂无标签记录</div>';
+  sidebar.scrollTop = scrollTop;
+}
+
 function renderLabelChannels() {
   const host = $("#labelChannelsRow");
   $$('[data-event-audio]', host).forEach(disposeLabelAudio);
@@ -2592,6 +2621,7 @@ function renderLabelChannels() {
     }).join("");
   }).join("");
   $$('[data-label-result], [data-label-reason]', host).forEach(enhanceLabelTouchSelect);
+  syncLabelHistorySidebar();
   if (!$("#labelTabAnnotation").hidden) void loadCurrentLabelWaveforms();
 }
 
@@ -3717,6 +3747,7 @@ async function saveSingleLabel(event, card) {
     }
     $(".label-channel-history", card).innerHTML = labelHistoryMarkup(sample, file);
     $(".label-channel-history-title span", card).textContent = `${channelLabelEventCount(sample.sample_id, file)} 条`;
+    syncLabelHistorySidebar();
     renderLabelEventSwitcher(card);
     const savedItemStillActive = activeLabelEvent(card)?.sampleId === saved.sample_id;
     selectLabelEvent(card, activeLabelEvent(card)?.sampleId || "");
@@ -3827,6 +3858,7 @@ async function deleteSavedLabelEvent(card, button) {
     $(".label-channel-form", card).hidden = true;
     $(".label-channel-history", card).innerHTML = labelHistoryMarkup(sourceSample, file);
     $(".label-channel-history-title span", card).textContent = `${channelLabelEventCount(card.dataset.labelSample, file)} 条`;
+    syncLabelHistorySidebar();
     const track = $(".label-audio-track", card);
     if (track) track.outerHTML = labelEventTrackMarkup(card.dataset.labelSample, Number(card._labelSignal?.duration_s || sourceSample?.duration_s || 0), file);
     renderLabelEventSwitcher(card);
@@ -4769,6 +4801,64 @@ function bindEvents() {
     renderLabelChannels();
     scheduleLabelSignalResize();
   });
+  const historyLayout = $("#labelWorkspaceLayout");
+  const historyResizer = $("#labelHistorySidebarResizer");
+  try {
+    const savedWidth = Number(localStorage.getItem("ai3-label-history-sidebar-width"));
+    if (Number.isFinite(savedWidth) && savedWidth >= 280 && savedWidth <= 600) historyLayout.style.setProperty("--history-sidebar-width", savedWidth + "px");
+  } catch { /* Use default width. */ }
+  historyResizer.addEventListener("pointerdown", event => {
+    if (getComputedStyle(historyResizer).display === "none") return;
+    const updateWidth = clientX => {
+      const rect = historyLayout.getBoundingClientRect();
+      const width = Math.max(280, Math.min(600, rect.width - 500, rect.right - clientX));
+      historyLayout.style.setProperty("--history-sidebar-width", width + "px");
+      return width;
+    };
+    event.preventDefault();
+    historyResizer.setPointerCapture(event.pointerId);
+    let width = updateWidth(event.clientX);
+    const move = moveEvent => { width = updateWidth(moveEvent.clientX); };
+    const finish = () => {
+      historyResizer.removeEventListener("pointermove", move);
+      historyResizer.removeEventListener("pointerup", finish);
+      historyResizer.removeEventListener("pointercancel", finish);
+      try { localStorage.setItem("ai3-label-history-sidebar-width", String(width)); } catch { /* Keep current width. */ }
+      scheduleLabelSignalResize();
+    };
+    historyResizer.addEventListener("pointermove", move);
+    historyResizer.addEventListener("pointerup", finish);
+    historyResizer.addEventListener("pointercancel", finish);
+  });
+  historyResizer.addEventListener("keydown", event => {
+    if (!["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+    event.preventDefault();
+    const current = parseFloat(historyLayout.style.getPropertyValue("--history-sidebar-width")) || 360;
+    const width = Math.max(280, Math.min(600, current + (event.key === "ArrowLeft" ? 20 : -20)));
+    historyLayout.style.setProperty("--history-sidebar-width", width + "px");
+    try { localStorage.setItem("ai3-label-history-sidebar-width", String(width)); } catch { /* Keep current width. */ }
+    scheduleLabelSignalResize();
+  });
+  $("#labelHistorySidebarContent").addEventListener("click", event => {
+    const button = event.target.closest("button");
+    const section = button?.closest("[data-history-card-index]");
+    if (!section) return;
+    const card = $$('[data-label-sample]', $("#labelChannelsRow"))[Number(section.dataset.historyCardIndex)];
+    if (!card) return;
+    const index = $$("button", section).indexOf(button);
+    const original = $$("button", $(".label-channel-history", card))[index];
+    original?.click();
+  });
+  $("#labelHistorySidebarContent").addEventListener("dblclick", event => {
+    const row = event.target.closest(".label-saved-event-row");
+    const section = row?.closest("[data-history-card-index]");
+    if (!section) return;
+    const card = $$('[data-label-sample]', $("#labelChannelsRow"))[Number(section.dataset.historyCardIndex)];
+    if (!card) return;
+    const rows = $$(".label-saved-event-row", section);
+    const original = $$(".label-saved-event-row", $(".label-channel-history", card))[rows.indexOf(row)];
+    original?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+  });
   $("#labelChannelsRow").addEventListener("change", event => {
     const result = event.target.closest("[data-label-result]");
     const card = event.target.closest("[data-label-sample]");
@@ -4921,6 +5011,20 @@ function bindEvents() {
       const results = state.labelingFile?.taxonomy?.results || {};
       const abnormalKey = Object.entries(results).find(([key, value]) => key === "nok" || String(value.name).includes("异常"))?.[0];
       if (!abnormalKey) return notify("标签类别中没有定义异常结果", "error");
+      const file = labelFileForCard(card);
+      if (!file || !state.labelingSessionPath) return notify("请先创建标注会话", "error");
+      const button = event.target.closest("[data-quick-anomaly]");
+      setBusy(button, true, "保存中…");
+      try {
+        await request(API.labelingPrototype, { method: "PATCH", body: {
+          path: file.absolute_path, session_path: state.labelingSessionPath,
+        } });
+      } catch (error) {
+        return notify(`标记典型异常失败：${error.message}`, "error", true);
+      } finally {
+        setBusy(button, false);
+      }
+      file.prototype = true;
       card.dataset.prototype = "true";
       card.dataset.eventSourceTypeOverride = "expert";
       $("[data-label-result]", card).value = abnormalKey;
@@ -4929,6 +5033,7 @@ function bindEvents() {
       $("[data-label-reason]", card)._syncTouchPicker?.();
       form.hidden = false;
       captureActiveLabelEventForm(card);
+      notify("已将当前文件的 prototype 保存为 true");
     }
   });
   $("#closeLabelAnalysisButton").addEventListener("click", () => { releaseAnalysisResults(); $("#labelAnalysisMask").hidden = true; });
